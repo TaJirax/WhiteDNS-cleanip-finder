@@ -1,4 +1,4 @@
-﻿package ui
+package ui
 
 import (
 	"encoding/csv"
@@ -219,18 +219,18 @@ type tuiModel struct {
 	selectedItems      map[int]bool
 	scanKind           string
 
-	scanStartTime time.Time
-	scanProgress  int
-	scanTotal     int
-	scanHits      int
-	scanResults   []string
-	scanErr       error
-	scanMsgCh     chan tea.Msg
-	scanCurrentIP string
-	scanTotalIPs  int
-	scanLogPath   string
-	scanLogMu     *sync.Mutex
-	scanPaused    bool
+	scanStartTime   time.Time
+	scanProgress    int
+	scanTotal       int
+	scanHits        int
+	scanResults     []string
+	scanErr         error
+	scanMsgCh       chan tea.Msg
+	scanCurrentIP   string
+	scanTotalIPs    int
+	scanLogPath     string
+	scanLogMu       *sync.Mutex
+	scanPaused      bool
 	transferLogPath string
 	transferLogMu   *sync.Mutex
 	// incremental scan output file (written as results are discovered)
@@ -511,7 +511,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case actionCompleteMsg:
 		return m.handleActionComplete(v)
 	case errorMsg:
-        m.setToast(sError.Render("x " + v.text), 5*time.Second)
+		m.setToast(sError.Render("x "+v.text), 5*time.Second)
 		return m, nil
 	case logMsg:
 		m.appendTransferLogLineFromScanLog(v.text)
@@ -655,7 +655,7 @@ func (m tuiModel) viewMenu(w, h int) string {
 	inner := w - 6 // account for panel border+padding
 
 	// Title bar
-	titleBar := sTitle.Render("WHITEDNS v9.32") + "  " +
+	titleBar := sTitle.Render("WHITEDNS v1") + "  " +
 		sDim.Render("developed by ashentajir") + "  " +
 		sDim.Render(fmt.Sprintf("port:%d  logs:%d  %s", m.app.Cfg.ProxyPort, len(m.logs), time.Now().Format("15:04:05")))
 	accentBar := lipgloss.NewStyle().Foreground(cAccent).Render(strings.Repeat("-", inner-1))
@@ -712,8 +712,8 @@ func (m tuiModel) viewMenu(w, h int) string {
 	}
 	logPanel := panelStyle(cBorderAlt).Width(inner).Render(logContent)
 
-	// Help bar
-    help := sDim.Render("up/down or jk navigate  |  Enter select  |  q quit")
+	// Help bar (restore arrows/emojis)
+	help := sDim.Render("↑↓ / jk navigate  ·  Enter select  ·  q quit")
 
 	var out strings.Builder
 	out.WriteString(titleBar + "\n")
@@ -767,14 +767,14 @@ func (m tuiModel) viewList(w, h int, title string, items []string, help string) 
 func (m tuiModel) viewScanMode(w, h int) string {
 	label := strings.ToUpper(m.scanKind)
 	items := []string{
-		"[list] Select from IranASN file",
-		"[paste] Paste targets (IPs/CIDRs)",
-		"[type] Type targets manually",
+		"[list] 🔍 Select from IranASN file",
+		"[paste] 📋 Paste targets (IPs/CIDRs)",
+		"[type] ⌨️ Type targets manually",
 	}
 	return m.viewList(w, h,
 		fmt.Sprintf("SCAN MODE - %s", label),
 		items,
-        "up/down navigate  |  Enter select  |  Esc back",
+		"↑↓ navigate  ·  Enter select  ·  Esc back",
 	)
 }
 
@@ -802,7 +802,7 @@ func (m tuiModel) viewSelectASN(w, h int) string {
 		e := m.asnFiltered[i]
 		checked := " "
 		if m.selectedItems[i] {
-            checked = "x"
+			checked = "x"
 		}
 		line := fmt.Sprintf("[%s] %-12s  %s", checked, e.ASN, e.ASName)
 		if len(line) > inner-4 {
@@ -827,9 +827,9 @@ func (m tuiModel) viewSelectASN(w, h int) string {
 			rows.String() + "\n" +
 			status,
 	)
-    helpText := "up/down navigate  |  ; typing on/off  |  TAB toggle  |  Space toggle in selection mode  |  /all select all  |  Enter confirm  |  Esc back"
+	helpText := "↑↓ navigate  ·  ; typing on/off  ·  TAB toggle  ·  Space toggle in selection mode  ·  /all select all  ·  Enter confirm  ·  Esc back"
 	if m.operationType == "export_asn" {
-        helpText = "up/down navigate  |  ; typing on/off  |  TAB toggle  |  Space toggle in selection mode  |  /all select all  |  Enter export  |  Esc back"
+		helpText = "↑↓ navigate  ·  ; typing on/off  ·  TAB toggle  ·  Space toggle in selection mode  ·  /all select all  ·  Enter export  ·  Esc back"
 	}
 	help := sDim.Render(helpText)
 	return panel + "\n\n" + help
@@ -842,7 +842,7 @@ func (m tuiModel) viewTypeTargets(w, h int) string {
 			sDim.Render("  IPs or CIDRs, space/newline separated\n\n") +
 			"  " + m.ti.View(),
 	)
-    return panel + "\n\n" + sDim.Render("Enter confirm  |  Esc back")
+	return panel + "\n\n" + sDim.Render("Enter confirm  ·  Esc back")
 }
 
 func (m tuiModel) viewReviewTargets(w, h int) string {
@@ -888,7 +888,7 @@ func (m tuiModel) viewReviewTargets(w, h int) string {
 	if len(stats.Invalid) > 0 && len(stats.Invalid) <= 5 {
 		invalidSection = "\n" + sWarn.Render("Skipped (invalid format):") + "\n"
 		for _, inv := range stats.Invalid {
-            invalidSection += fmt.Sprintf("  x  %s\n", inv)
+			invalidSection += fmt.Sprintf("  x  %s\n", inv)
 		}
 	} else if len(stats.Invalid) > 5 {
 		invalidSection = fmt.Sprintf("\n%s (showing first 5 of %d)\n", sWarn.Render("Skipped (invalid format):"), len(stats.Invalid))
@@ -896,7 +896,7 @@ func (m tuiModel) viewReviewTargets(w, h int) string {
 			if i >= 5 {
 				break
 			}
-            invalidSection += fmt.Sprintf("  x  %s\n", inv)
+			invalidSection += fmt.Sprintf("  x  %s\n", inv)
 		}
 	}
 
@@ -909,7 +909,7 @@ func (m tuiModel) viewReviewTargets(w, h int) string {
 			invalidSection,
 	)
 
-    help := sDim.Render("up/down scroll  |  Enter confirm  |  Esc back to edit")
+	help := sDim.Render("↑↓ scroll  ·  Enter confirm  ·  Esc back to edit")
 	return panel + "\n\n" + help
 }
 
@@ -921,7 +921,7 @@ func (m tuiModel) viewSelectPorts(w, h int) string {
 				sDim.Render("  e.g. 80,443,2053,2083,2087,2096,8443,8080-8090\n\n") +
 				"  " + m.ti.View(),
 		)
-        return panel + "\n\n" + sDim.Render("Enter confirm  |  Esc back")
+		return panel + "\n\n" + sDim.Render("Enter confirm  |  Esc back")
 	}
 	inner := w - 6
 	visibleRows := h - 10
@@ -968,7 +968,7 @@ func (m tuiModel) viewSelectPorts(w, h int) string {
 	panel := panelStyle(cBorderActive).Width(inner).Render(
 		sHeader.Render(" SELECT PORTS ") + "\n\n" + rows.String(),
 	)
-    return panel + "\n\n" + sDim.Render("up/down navigate  |  Enter select  |  Esc back")
+	return panel + "\n\n" + sDim.Render("↑↓ navigate  ·  Enter select  ·  Esc back")
 }
 
 func (m tuiModel) viewSelectMethod(w, h int) string {
@@ -983,7 +983,7 @@ func (m tuiModel) viewSelectMethod(w, h int) string {
 		labels[2] += "  " + sWarn.Render("[unavailable->Direct]")
 	}
 
-    help := "up/down navigate  |  Enter select  |  Esc back"
+	help := "↑↓ navigate  ·  Enter select  ·  Esc back"
 	if !scanner.ToolAvailable("masscan") || !scanner.ToolAvailable("nmap") {
 		help += "  [unavailable tools fall back to Direct]"
 	}
@@ -993,7 +993,7 @@ func (m tuiModel) viewSelectMethod(w, h int) string {
 
 func (m tuiModel) viewSelectConcurrency(w, h int) string {
 	return m.viewList(w, h, "CONCURRENCY", m.concurrencyOptions,
-        "up/down navigate  |  Enter select  |  Esc back",
+		"↑↓ navigate  ·  Enter select  ·  Esc back",
 	)
 }
 
@@ -1053,10 +1053,10 @@ func (m tuiModel) viewScanning(w, h int) string {
 			}
 			localT := segF - float64(seg)
 			col := mix(gradientStops[seg], gradientStops[seg+1], localT)
-            left += lipgloss.NewStyle().Foreground(lipgloss.Color(col)).Render("#")
+			left += lipgloss.NewStyle().Foreground(lipgloss.Color(col)).Render("#")
 		}
 	}
-    empty := sDim.Render(strings.Repeat("-", barW-filled))
+	empty := sDim.Render(strings.Repeat("-", barW-filled))
 	bar := left + empty + "  " + sAccent.Render(fmt.Sprintf("%3d%%", int(progress*100)))
 
 	stats := fmt.Sprintf("  Processed: %s/%s   Found: %s   IPs: %s",
@@ -1119,7 +1119,7 @@ func (m tuiModel) viewScanning(w, h int) string {
 		if len(r) > inner-6 {
 			r = r[:inner-6]
 		}
-        liveRows.WriteString(sSuccess.Render("  > " + r) + "\n")
+		liveRows.WriteString(sSuccess.Render("  > "+r) + "\n")
 	}
 
 	headerBlock := m.spinner.View() + "  " + sHeader.Render(" "+opLabel+" ") + "\n\n"
@@ -1135,7 +1135,7 @@ func (m tuiModel) viewScanning(w, h int) string {
 			sAccent.Render("  Live results:\n") + liveRows.String() + "\n" +
 			sHeader.Render(" ACTIVITY LOG ") + "\n" + logBlock,
 	)
-    return panel + "\n\n" + sDim.Render("p pause/resume  |  s save  |  c/q quit  |  Esc back")
+	return panel + "\n\n" + sDim.Render("p pause/resume  |  s save  |  c/q quit  |  Esc back")
 }
 
 func scanETA(start time.Time, current, total int) string {
@@ -1171,9 +1171,9 @@ func (m tuiModel) viewScanResults(w, h int) string {
 
 	var body strings.Builder
 	if m.scanErr != nil {
-        body.WriteString(sError.Render("x " + m.scanErr.Error()) + "\n")
+		body.WriteString(sError.Render("x "+m.scanErr.Error()) + "\n")
 	} else {
-        body.WriteString(sSuccess.Render(fmt.Sprintf("  OK  Found %d results\n\n", len(m.scanResults))))
+		body.WriteString(sSuccess.Render(fmt.Sprintf("  OK  Found %d results\n\n", len(m.scanResults))))
 		start := m.cursor - visibleRows + 1
 		if start < 0 {
 			start = 0
@@ -1208,7 +1208,7 @@ func (m tuiModel) viewScanResults(w, h int) string {
 			if i == m.cursor {
 				body.WriteString(sSelected.Render(r) + "\n")
 			} else {
-                body.WriteString(sSuccess.Render("  OK " + r) + "\n")
+				body.WriteString(sSuccess.Render("  OK "+r) + "\n")
 			}
 		}
 		if len(m.scanResults) > visibleRows {
@@ -1219,7 +1219,7 @@ func (m tuiModel) viewScanResults(w, h int) string {
 	panel := panelStyle(cBorderAlt).Width(inner).Render(
 		sHeader.Render(" "+strings.ToUpper(opLabel)+" ") + "\n\n" + body.String(),
 	)
-    return panel + "\n\n" + sDim.Render("up/down scroll  |  s save  |  Enter/q back to menu")
+	return panel + "\n\n" + sDim.Render("up/down scroll  |  s save  |  Enter/q back to menu")
 }
 
 func (m tuiModel) viewManageRules(w, h int) string {
@@ -1233,7 +1233,7 @@ func (m tuiModel) viewManageRules(w, h int) string {
 			sHeader.Render(" ADD "+strings.ToUpper(ruleType)+" RULE ") + "\n\n" +
 				"  " + m.ti.View(),
 		)
-        return panel + "\n\n" + sDim.Render("Enter save  |  Esc cancel")
+		return panel + "\n\n" + sDim.Render("Enter save  |  Esc cancel")
 	}
 
 	items := []string{
@@ -1249,7 +1249,7 @@ func (m tuiModel) viewManageRules(w, h int) string {
 	panel := panelStyle(cBorderActive).Width(inner).Render(
 		sHeader.Render(" MANAGE RULES ") + "\n\n" + rows.String(),
 	)
-    return panel + "\n\n" + sDim.Render("1-4 select  |  Esc back")
+	return panel + "\n\n" + sDim.Render("1-4 select  |  Esc back")
 }
 
 func (m tuiModel) viewSimpleInput(w, h int, title, placeholder string) string {
@@ -1259,7 +1259,7 @@ func (m tuiModel) viewSimpleInput(w, h int, title, placeholder string) string {
 			sDim.Render("  "+placeholder+"\n\n") +
 			"  " + m.ti.View(),
 	)
-    return panel + "\n\n" + sDim.Render("Enter confirm  |  Esc back")
+	return panel + "\n\n" + sDim.Render("Enter confirm  |  Esc back")
 }
 
 func (m tuiModel) viewForceReroute(w, h int) string {
@@ -1275,7 +1275,7 @@ func (m tuiModel) viewForceReroute(w, h int) string {
 			sInfo.Render("  "+step+"\n\n") +
 			"  " + m.ti.View(),
 	)
-    return panel + "\n\n" + sDim.Render("Enter confirm  |  Esc back")
+	return panel + "\n\n" + sDim.Render("Enter confirm  |  Esc back")
 }
 
 func (m tuiModel) viewSetProxyPort(w, h int) string {
@@ -1285,7 +1285,7 @@ func (m tuiModel) viewSetProxyPort(w, h int) string {
 			sInfo.Render(fmt.Sprintf("  Current port: %d\n\n", m.app.Cfg.ProxyPort)) +
 			"  " + m.ti.View(),
 	)
-    return panel + "\n\n" + sDim.Render("Enter confirm  |  Esc back")
+	return panel + "\n\n" + sDim.Render("Enter confirm  |  Esc back")
 }
 
 // ------------------------------------------------------------
@@ -1368,7 +1368,7 @@ func (m tuiModel) activateMenuItem() (tuiModel, tea.Cmd) {
 		m.app.Router.ClearAllRoutes()
 		m.app.Scanner.ClearCache()
 		m.addLog("Cache cleared")
-        m.setToast(sSuccess.Render("OK Cache cleared"), 3*time.Second)
+		m.setToast(sSuccess.Render("OK Cache cleared"), 3*time.Second)
 	case "start_proxy_white":
 		m.addLog("Starting proxy (white mode)...")
 		return m, m.cmdStartProxy("white_ip")
@@ -1478,7 +1478,7 @@ func (m tuiModel) handleSelectASNScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 			return m, nil
 		}
 		if len(m.selectedItems) == 0 {
-            m.setToast(sError.Render("x Select at least one ASN"), 3*time.Second)
+			m.setToast(sError.Render("x Select at least one ASN"), 3*time.Second)
 			return m, nil
 		}
 		for idx := range m.selectedItems {
@@ -1493,10 +1493,10 @@ func (m tuiModel) handleSelectASNScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 			path, count, err := exportASNTargetsToTXT(m.app.DataDir, m.scanConfig.ASNs, "")
 			if err != nil {
 				m.addLog(fmt.Sprintf("ASN export failed: %v", err))
-                m.setToast(sError.Render("x " + err.Error()), 5*time.Second)
+				m.setToast(sError.Render("x "+err.Error()), 5*time.Second)
 			} else {
 				m.addLog(fmt.Sprintf("Exported %d IPs to %s", count, path))
-                m.setToast(sSuccess.Render(fmt.Sprintf("OK Exported %d IPs", count)), 4*time.Second)
+				m.setToast(sSuccess.Render(fmt.Sprintf("OK Exported %d IPs", count)), 4*time.Second)
 			}
 			m.goBack()
 			return m, nil
@@ -1524,7 +1524,7 @@ func (m *tuiModel) selectAllASNs() {
 	m.cursor = 0
 	m.ti.SetValue("")
 	if m.operationType == "export_asn" {
-        m.setToast(sSuccess.Render(fmt.Sprintf("OK Selected all %d ASNs", len(m.asnList))), 3*time.Second)
+		m.setToast(sSuccess.Render(fmt.Sprintf("OK Selected all %d ASNs", len(m.asnList))), 3*time.Second)
 	}
 }
 
@@ -1710,7 +1710,7 @@ func (m tuiModel) handleSelectMethodScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 	case "enter":
 		methods := []string{"direct", "masscan", "nmap"}
 		m.scanConfig.Method = methods[m.cursor]
-        m.addLog(fmt.Sprintf("OK Scan method: %s", strings.ToUpper(m.scanConfig.Method)))
+		m.addLog(fmt.Sprintf("OK Scan method: %s", strings.ToUpper(m.scanConfig.Method)))
 
 		m.pushScreen(screenSelectConcurrency)
 		m.cursor = 1
@@ -1808,10 +1808,10 @@ func (m tuiModel) handleScanningScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 			}
 			if path, err := saveScanOutputResults(m.app.DataDir, kind, m.scanResults); err != nil {
 				m.addLog(fmt.Sprintf("Failed to save scan output: %v", err))
-                m.setToast(sError.Render("x Save failed"), 3*time.Second)
+				m.setToast(sError.Render("x Save failed"), 3*time.Second)
 			} else {
 				m.addLog(fmt.Sprintf("Saved scan output to %s", path))
-                m.setToast(sSuccess.Render("OK Saved scan output"), 3*time.Second)
+				m.setToast(sSuccess.Render("OK Saved scan output"), 3*time.Second)
 			}
 		}
 	}
@@ -1828,7 +1828,7 @@ func (m tuiModel) handleInstantConnectScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 		}
 		m.ti.Blur()
 		m.addLog(fmt.Sprintf("Added %d endpoints", count))
-        m.setToast(sSuccess.Render(fmt.Sprintf("OK Added %d endpoints", count)), 3*time.Second)
+		m.setToast(sSuccess.Render(fmt.Sprintf("OK Added %d endpoints", count)), 3*time.Second)
 		m.goBack()
 		return m, nil
 	}
@@ -1849,7 +1849,7 @@ func (m tuiModel) handleManageRulesScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 					m.setToast(sError.Render("x "+err.Error()), 4*time.Second)
 				} else {
 					m.addLog(fmt.Sprintf("Added %s: %s", action, pattern))
-                    m.setToast(sSuccess.Render("OK Rule added"), 3*time.Second)
+					m.setToast(sSuccess.Render("OK Rule added"), 3*time.Second)
 				}
 			}
 			m.ti.Blur()
@@ -1874,7 +1874,7 @@ func (m tuiModel) handleManageRulesScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 		case "4":
 			m.app.RuleEngine.ClearRules()
 			m.addLog("All rules cleared")
-            m.setToast(sSuccess.Render("OK Rules cleared"), 3*time.Second)
+			m.setToast(sSuccess.Render("OK Rules cleared"), 3*time.Second)
 		case "enter":
 			m.goBack()
 		}
@@ -1927,12 +1927,12 @@ func (m tuiModel) handleSetProxyPortScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 		raw := strings.TrimSpace(m.ti.Value())
 		port, err := strconv.Atoi(raw)
 		if err != nil || port < 1 || port > 65535 {
-            m.setToast(sError.Render("x Invalid port (1-65535)"), 3*time.Second)
+			m.setToast(sError.Render("x Invalid port (1-65535)"), 3*time.Second)
 			return m, nil
 		}
 		m.app.Cfg.ProxyPort = port
 		m.addLog(fmt.Sprintf("Proxy port set to %d", port))
-        m.setToast(sSuccess.Render(fmt.Sprintf("OK Port set to %d", port)), 4*time.Second)
+		m.setToast(sSuccess.Render(fmt.Sprintf("OK Port set to %d", port)), 4*time.Second)
 		m.ti.Blur()
 		m.goBack()
 		return m, nil
@@ -1959,10 +1959,10 @@ func (m tuiModel) handleScanResultsScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 			}
 			if path, err := saveScanOutputResults(m.app.DataDir, kind, m.scanResults); err != nil {
 				m.addLog(fmt.Sprintf("Failed to save scan output: %v", err))
-                m.setToast(sError.Render("x Save failed"), 3*time.Second)
+				m.setToast(sError.Render("x Save failed"), 3*time.Second)
 			} else {
 				m.addLog(fmt.Sprintf("Saved scan output to %s", path))
-                m.setToast(sSuccess.Render("OK Saved scan output"), 3*time.Second)
+				m.setToast(sSuccess.Render("OK Saved scan output"), 3*time.Second)
 			}
 		case "enter", "q", "backspace":
 			m.screen = screenMenu
@@ -1999,7 +1999,7 @@ func (m tuiModel) handleScanComplete(msg scanCompleteMsg) (tuiModel, tea.Cmd) {
 	m.appendNewScanResultsToFile()
 	if msg.err != nil {
 		m.addLog(fmt.Sprintf("Scan failed: %v", msg.err))
-        m.setToast(sError.Render("x " + msg.err.Error()), 5*time.Second)
+		m.setToast(sError.Render("x "+msg.err.Error()), 5*time.Second)
 		m.screen = screenMenu
 	} else {
 		dur := msg.duration
@@ -2007,7 +2007,7 @@ func (m tuiModel) handleScanComplete(msg scanCompleteMsg) (tuiModel, tea.Cmd) {
 			dur = time.Since(m.scanStartTime).Round(time.Second)
 		}
 		m.addLog(fmt.Sprintf("Scan done: %d proxies in %s", len(msg.proxies), dur))
-        m.setToast(sSuccess.Render(fmt.Sprintf("OK Found %d proxies", len(msg.proxies))), 3*time.Second)
+		m.setToast(sSuccess.Render(fmt.Sprintf("OK Found %d proxies", len(msg.proxies))), 3*time.Second)
 		m.screen = screenScanResults
 		m.cursor = 0
 	}
@@ -2057,11 +2057,11 @@ func (m tuiModel) handlePoolOperationComplete(msg poolOperationCompleteMsg) (tui
 	m.appendNewScanResultsToFile()
 	if msg.err != nil {
 		m.addLog(fmt.Sprintf("%s failed: %v", msg.operationType, msg.err))
-        m.setToast(sError.Render("x " + msg.err.Error()), 5*time.Second)
+		m.setToast(sError.Render("x "+msg.err.Error()), 5*time.Second)
 		m.screen = screenMenu
 	} else {
 		m.addLog(fmt.Sprintf("%s done: %d items", msg.operationType, len(msg.results)))
-        m.setToast(sSuccess.Render(fmt.Sprintf("OK %s complete", msg.operationType)), 3*time.Second)
+		m.setToast(sSuccess.Render(fmt.Sprintf("OK %s complete", msg.operationType)), 3*time.Second)
 		m.screen = screenScanResults
 		m.cursor = 0
 	}
@@ -2071,10 +2071,10 @@ func (m tuiModel) handlePoolOperationComplete(msg poolOperationCompleteMsg) (tui
 func (m tuiModel) handleActionComplete(msg actionCompleteMsg) (tuiModel, tea.Cmd) {
 	if msg.err != nil {
 		m.addLog(fmt.Sprintf("%s failed: %v", msg.title, msg.err))
-        m.setToast(sError.Render("x " + msg.err.Error()), 5*time.Second)
+		m.setToast(sError.Render("x "+msg.err.Error()), 5*time.Second)
 	} else {
 		m.addLog(fmt.Sprintf("%s: %s", msg.title, msg.text))
-        m.setToast(sSuccess.Render("OK " + msg.text), 4*time.Second)
+		m.setToast(sSuccess.Render("OK "+msg.text), 4*time.Second)
 	}
 	return m, nil
 }
@@ -2586,13 +2586,13 @@ func (m *tuiModel) startScanLogFile(scanKind string, targets []string, ports []i
 	m.scanLogPath = path
 	m.writeScanLogLine(fmt.Sprintf("[START] kind=%s targets=%d ports=%d concurrency=%d timeout=%s", scanKind, len(targets), len(ports), concurrency, timeout))
 
-		transferPath := filepath.Join(logDir, fmt.Sprintf("transfer-%s-%s.txt", scanKind, stamp))
-		if absTransfer, err := filepath.Abs(transferPath); err == nil {
-			transferPath = absTransfer
-		}
-		m.transferLogPath = transferPath
-		_ = storage.AtomicWriteText(transferPath, fmt.Sprintf("# Transfer benchmark log\n# kind: %s\n# section: throughput latency tags\n\n", scanKind))
-		m.writeScanLogLine(fmt.Sprintf("[TRANSFER] log file: %s", transferPath))
+	transferPath := filepath.Join(logDir, fmt.Sprintf("transfer-%s-%s.txt", scanKind, stamp))
+	if absTransfer, err := filepath.Abs(transferPath); err == nil {
+		transferPath = absTransfer
+	}
+	m.transferLogPath = transferPath
+	_ = storage.AtomicWriteText(transferPath, fmt.Sprintf("# Transfer benchmark log\n# kind: %s\n# section: throughput latency tags\n\n", scanKind))
+	m.writeScanLogLine(fmt.Sprintf("[TRANSFER] log file: %s", transferPath))
 
 	// Log targets with proper spacing - one per line for readability
 	m.writeScanLogLine(fmt.Sprintf("[TARGETS] %d total:", len(targets)))
@@ -2659,7 +2659,7 @@ func (m *tuiModel) appendTransferLogLineFromScanLog(line string) {
 	if line == "" {
 		return
 	}
-    if !strings.Contains(line, "up") && !strings.Contains(line, "down") && !strings.Contains(line, "[telegram]") && !strings.Contains(line, "[chatgpt]") && !strings.Contains(line, "[instagram]") && !strings.Contains(line, "[workers]") && !strings.Contains(line, "[pages]") && !strings.Contains(line, "[psiphon]") {
+	if !strings.Contains(line, "up") && !strings.Contains(line, "down") && !strings.Contains(line, "[telegram]") && !strings.Contains(line, "[chatgpt]") && !strings.Contains(line, "[instagram]") && !strings.Contains(line, "[workers]") && !strings.Contains(line, "[pages]") && !strings.Contains(line, "[psiphon]") {
 		return
 	}
 	m.transferLogMu.Lock()
@@ -2728,7 +2728,7 @@ func (m tuiModel) recentLogs(n, maxW int) []string {
 		if len(l) > maxW {
 			l = l[:maxW-1] + "..."
 		}
-        lines = append(lines, sDim.Render("  - " + l))
+		lines = append(lines, sDim.Render("  - "+l))
 	}
 	return lines
 }
