@@ -1,4 +1,4 @@
-﻿package ui
+package ui
 
 import (
 	"bufio"
@@ -146,10 +146,10 @@ func (a *App) startGoProxy(mode string) {
 
 func drawHeader(cfg config.Config, mode string) {
 	clearScreen()
-	fmt.Println("Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â")
+    fmt.Println("------------------------------------------------------------")
 	fmt.Println(" WHITEDNS v9.2.0 ")
 	fmt.Println(" developed by ashentajir ")
-	fmt.Println("Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â")
+	fmt.Println("------------------------------------------------------------")
 	uiLabel := "WhiteDNS"
 	if mode == "desync" {
 		uiLabel = "Desync"
@@ -157,7 +157,7 @@ func drawHeader(cfg config.Config, mode string) {
 	fmt.Printf(" UI Mode: %s\n", uiLabel)
 	fmt.Printf(" Conn Mode: %s\n", mapMode(mode))
 	fmt.Printf(" Proxy: %s\n", cfg.ListenAddr())
-	fmt.Println("Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â")
+	fmt.Println("------------------------------------------------------------")
 }
 
 func printMainMenu(uiMode string) {
@@ -880,13 +880,13 @@ func (a *App) promptScanMethod(totalTargets, totalPorts int, httpMode bool) stri
 	fmt.Println(" SCAN METHOD")
 	totalEPS := totalTargets * totalPorts
 	if httpMode {
-		fmt.Printf(" [1] Normal (Go/direct)             Ã¢â‚¬â€ %d probes (%d IPs Ã— %d ports)\n", totalEPS, totalTargets, totalPorts)
-		fmt.Printf(" [2] Masscan preflight              Ã¢â‚¬â€ %d probes (%d IPs Ã— %d ports)\n", totalEPS, totalTargets, totalPorts)
-		fmt.Printf(" [3] Nmap preflight                 Ã¢â‚¬â€ %d probes (%d IPs Ã— %d ports)\n", totalEPS, totalTargets, totalPorts)
+		fmt.Printf(" [1] Normal (Go/direct)             - %d probes (%d IPs x %d ports)\n", totalEPS, totalTargets, totalPorts)
+		fmt.Printf(" [2] Masscan preflight              - %d probes (%d IPs x %d ports)\n", totalEPS, totalTargets, totalPorts)
+		fmt.Printf(" [3] Nmap preflight                 - %d probes (%d IPs x %d ports)\n", totalEPS, totalTargets, totalPorts)
 	} else {
-		fmt.Printf(" [1] Normal (Go/direct)             Ã¢â‚¬â€ %d probes (%d IPs Ã— %d ports)\n", totalEPS, totalTargets, totalPorts)
-		fmt.Printf(" [2] Masscan preflight              Ã¢â‚¬â€ %d probes (%d IPs Ã— %d ports)\n", totalEPS, totalTargets, totalPorts)
-		fmt.Printf(" [3] Nmap preflight                 Ã¢â‚¬â€ %d probes (%d IPs Ã— %d ports)\n", totalEPS, totalTargets, totalPorts)
+		fmt.Printf(" [1] Normal (Go/direct)             - %d probes (%d IPs x %d ports)\n", totalEPS, totalTargets, totalPorts)
+		fmt.Printf(" [2] Masscan preflight              - %d probes (%d IPs x %d ports)\n", totalEPS, totalTargets, totalPorts)
+		fmt.Printf(" [3] Nmap preflight                 - %d probes (%d IPs x %d ports)\n", totalEPS, totalTargets, totalPorts)
 	}
 
 	methodMap := map[string]string{"1": "direct", "2": "masscan", "3": "nmap"}
@@ -1069,7 +1069,7 @@ func (a *App) selectASNScanTargets() []string {
 		fmt.Printf("\nSearch Query: %s\n", query)
 		fmt.Printf(" Total Matches: %d ASNs\n", len(groups))
 		fmt.Printf(" Selected ASNs: %d\n", countSelectedASN(selected))
-		fmt.Println("Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â")
+		fmt.Println("------------------------------------------------------------")
 		for i, group := range groups[start:end] {
 			mark := " "
 			if selected[group.ASN] {
