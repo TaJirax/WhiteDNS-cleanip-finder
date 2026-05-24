@@ -40,6 +40,32 @@ func TestTransportHealthSummaryUsesOverride(t *testing.T) {
 	}
 }
 
+func TestTransportHealthSummaryRetriesTransientFailures(t *testing.T) {
+	oldProbe := transportHealthProbe
+	var mu sync.Mutex
+	callCounts := make(map[string]int)
+	transportHealthProbe = func(ctx context.Context, site string, timeout time.Duration) bool {
+		mu.Lock()
+		defer mu.Unlock()
+		callCounts[site]++
+		return callCounts[site] > 1
+	}
+	defer func() { transportHealthProbe = oldProbe }()
+
+	s := NewScanner(&ScannerConfig{})
+	summary := s.logTransportHealth(context.Background(), "proxy-scan", []string{"snapp.ir", "digikala.com"}, 200*time.Millisecond)
+	if summary.Total != 2 || summary.Reachable != 2 {
+		t.Fatalf("expected retries to recover both sites, got: %+v", summary)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, site := range []string{"snapp.ir", "digikala.com"} {
+		if callCounts[site] < 2 {
+			t.Fatalf("expected retry for %s, got %d calls", site, callCounts[site])
+		}
+	}
+}
+
 func TestScanIPsWithProgressLocalHTTP(t *testing.T) {
 	oldProbe := transportHealthProbe
 	transportHealthProbe = func(ctx context.Context, site string, timeout time.Duration) bool { return true }

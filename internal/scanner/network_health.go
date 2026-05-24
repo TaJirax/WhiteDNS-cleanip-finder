@@ -39,6 +39,8 @@ var proxyTransferBenchmark = defaultProxyTransferBenchmark
 const (
 	defaultTransportHealthInterval = 8 * time.Second
 	defaultTransportPauseSleep     = 3 * time.Second
+	defaultTransportHealthAttempts  = 2
+	defaultTransportHealthRetryGap  = 200 * time.Millisecond
 )
 
 type TransportHealthSummary struct {
@@ -82,7 +84,7 @@ func (s *Scanner) logTransportHealth(ctx context.Context, label string, sites []
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			ok := transportHealthProbe(ctx, site, timeout)
+			ok := probeTransportSiteWithRetry(ctx, site, timeout, defaultTransportHealthAttempts, defaultTransportHealthRetryGap, transportHealthProbe)
 			mu.Lock()
 			if ok {
 				summary.Reachable++
@@ -104,6 +106,33 @@ func (s *Scanner) logTransportHealth(ctx context.Context, label string, sites []
 	}
 
 	return summary
+}
+
+func probeTransportSiteWithRetry(ctx context.Context, site string, timeout time.Duration, attempts int, retryGap time.Duration, probe func(context.Context, string, time.Duration) bool) bool {
+	if probe == nil {
+		probe = probeTransportSite
+	}
+	if attempts <= 0 {
+		attempts = 1
+	}
+	if retryGap < 0 {
+		retryGap = 0
+	}
+
+	for attempt := 0; attempt < attempts; attempt++ {
+		if probe(ctx, site, timeout) {
+			return true
+		}
+		if attempt == attempts-1 {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(retryGap):
+		}
+	}
+	return false
 }
 
 func (s *Scanner) ensureTransportHealthy(ctx context.Context, label string, sites []string, timeout time.Duration, minReachable int) TransportHealthSummary {
