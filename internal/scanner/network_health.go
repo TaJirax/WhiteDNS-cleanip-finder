@@ -36,6 +36,52 @@ var transportHealthProbe = probeTransportSite
 
 var proxyTransferBenchmark = defaultProxyTransferBenchmark
 
+// proxyTransferBenchmarkBrrr is an alternative, more aggressive transfer
+// benchmark. It runs a small number of parallel download/upload attempts
+// and returns the best observed throughput. It's designed to be faster and
+// to reduce per-endpoint latency when the user selects the "brrr" model.
+func proxyTransferBenchmarkBrrr(endpoint string, verifier proxyVerifier, timeout time.Duration) (float64, float64) {
+	// Use slightly shorter bounding but more attempts/parallelism.
+	benchTimeout := timeout
+	if benchTimeout < 6*time.Second {
+		benchTimeout = 6 * time.Second
+	}
+	if benchTimeout > 20*time.Second {
+		benchTimeout = 20 * time.Second
+	}
+
+	attempts := 3
+	var bestDown, bestUp float64
+	for i := 0; i < attempts; i++ {
+		client, err := benchmarkHTTPClientForProxy(endpoint, verifier, benchTimeout)
+		if err != nil {
+			time.Sleep(80 * time.Millisecond)
+			continue
+		}
+		// run download and upload concurrently with context
+		ctx, cancel := context.WithTimeout(context.Background(), benchTimeout)
+		downCh := make(chan float64, 1)
+		upCh := make(chan float64, 1)
+		go func() { downCh <- benchmarkProxyDownload(ctx, client) }()
+		go func() { upCh <- benchmarkProxyUpload(ctx, client) }()
+		down := <-downCh
+		up := <-upCh
+		cancel()
+
+		if down > bestDown {
+			bestDown = down
+		}
+		if up > bestUp {
+			bestUp = up
+		}
+		if bestDown > 0 && bestUp > 0 {
+			break
+		}
+		time.Sleep(80 * time.Millisecond)
+	}
+	return bestDown, bestUp
+}
+
 const (
 	defaultTransportHealthInterval = 8 * time.Second
 	defaultTransportPauseSleep     = 3 * time.Second

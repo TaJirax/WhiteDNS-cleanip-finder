@@ -41,7 +41,7 @@ func ProbeOne(ip, hostname string, port int, timeout time.Duration) ProbeResult 
 	}
 
 	// ensure close on exit
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	remaining := timeout - time.Since(start)
 	if remaining <= 0 {
@@ -59,7 +59,7 @@ func ProbeOne(ip, hostname string, port int, timeout time.Duration) ProbeResult 
 	_ = tlsConn.SetDeadline(time.Now().Add(remaining))
 	if err := tlsConn.Handshake(); err != nil {
 		// try once without ServerName in case the server rejects SNI
-		// reopen raw TCP connection for second attempt
+		// reopen raw TCP connection for second attempt using remaining timeout
 		remaining = timeout - time.Since(start)
 		if remaining <= 0 {
 			r.Error = "timeout before TLS retry"
@@ -67,14 +67,18 @@ func ProbeOne(ip, hostname string, port int, timeout time.Duration) ProbeResult 
 			r.LatencyMs = float64(time.Since(start).Milliseconds())
 			return r
 		}
-		conn2, err2 := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", ip, port), timeout)
+		// Dial with remaining timeout
+		dctx, dcancel := context.WithTimeout(context.Background(), remaining)
+		dialer := &net.Dialer{}
+		conn2, err2 := dialer.DialContext(dctx, "tcp", fmt.Sprintf("%s:%d", ip, port))
+		dcancel()
 		if err2 != nil {
 			r.Error = err.Error()
 			r.Success = false
 			r.LatencyMs = float64(time.Since(start).Milliseconds())
 			return r
 		}
-		defer conn2.Close()
+		defer func() { _ = conn2.Close() }()
 		tlsConn2 := tls.Client(conn2, &tls.Config{InsecureSkipVerify: true})
 		_ = tlsConn2.SetDeadline(time.Now().Add(remaining))
 		if err3 := tlsConn2.Handshake(); err3 != nil {
@@ -216,12 +220,20 @@ func probeHTTP(tlsConn *tls.Conn, hostname string, timeout time.Duration) (int, 
 // resultCh and sends +1 to progressCh for each completed probe. Closes
 // resultCh and progressCh when done.
 func RunScan(cfg ScanConfig, resultCh chan<- ProbeResult, progressCh chan<- int) {
+	// Close channels on exit; callers must provide open channels. Use recover
+	// wrappers to avoid panics if a caller mistakenly closed a channel.
 	defer func() {
 		if resultCh != nil {
-			close(resultCh)
+			func() {
+				defer func() { _ = recover() }()
+				close(resultCh)
+			}()
 		}
 		if progressCh != nil {
-			close(progressCh)
+			func() {
+				defer func() { _ = recover() }()
+				close(progressCh)
+			}()
 		}
 	}()
 
@@ -305,6 +317,20 @@ func expandTargets(raw []string) []string {
 			endIP := ipToBigInt(lastIP(ipnet))
 			if count == 1 {
 				if ipStr := bigIntToIP(startIP, ip.To4() == nil); ipStr != "" {
+					if _, ok := seen[ipStr]; !ok {
+						seen[ipStr] = struct{}{}
+						out = append(out, ipStr)
+					}
+				}
+				continue
+			}
+			// For very small networks (/31 and /32) include all addresses.
+			if count <= 2 {
+				for cur := new(big.Int).Set(startIP); cur.Cmp(endIP) <= 0; cur.Add(cur, big.NewInt(1)) {
+					ipStr := bigIntToIP(cur, ip.To4() == nil)
+					if ipStr == "" {
+						continue
+					}
 					if _, ok := seen[ipStr]; !ok {
 						seen[ipStr] = struct{}{}
 						out = append(out, ipStr)

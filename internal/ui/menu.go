@@ -805,11 +805,24 @@ func (a *App) handleProxyScanner(label string, defaultPorts []int, defaultDiscov
 
 	var proxies []string
 	var err error
+	// Allow user to select transfer benchmark model
+	fmt.Println()
+	fmt.Println(" TRANSFER BENCHMARK MODEL")
+	fmt.Println(" [1] Old (stable)")
+	fmt.Println(" [2] Brrr (fast)")
+	fmt.Print("Choice [1/2]: ")
+	tmChoice := strings.TrimSpace(a.readLineInput())
+	transferModel := "old"
+	if tmChoice == "2" {
+		transferModel = "brrr"
+	}
+
 	opts := scanner.ProxyScanOptions{
-		Ports:       ports,
-		Discovery:   method,
-		Concurrency: concurrency,
-		Timeout:     time.Duration(timeoutSec) * time.Second,
+		Ports:         ports,
+		Discovery:     method,
+		Concurrency:   concurrency,
+		Timeout:       time.Duration(timeoutSec) * time.Second,
+		TransferModel: transferModel,
 	}
 
 	if httpMode {

@@ -46,6 +46,9 @@ type ProxyScanOptions struct {
 	Discovery   string
 	Concurrency int
 	Timeout     time.Duration
+	// TransferModel selects which transfer benchmark implementation to use.
+	// Valid values: "old" (default) or "brrr" (new fast model).
+	TransferModel string
 }
 
 type ProxyScanResult struct {
@@ -138,7 +141,7 @@ func (s *Scanner) scanProxies(rawTargets []string, opts ProxyScanOptions, verifi
 	}
 
 	s.logf("[TRACE] scanProxies: about to call scanProxyCandidates with %d candidates\n", len(candidates))
-	verified := s.scanProxyCandidates(candidates, concurrency, timeout, verifier)
+	verified := s.scanProxyCandidates(candidates, concurrency, timeout, verifier, opts.TransferModel)
 	s.logf("[TRACE] scanProxies: scanProxyCandidates returned %d verified\n", len(verified))
 	return deduplicateProxyResults(verified), nil
 }
@@ -204,7 +207,7 @@ func (s *Scanner) withTargetPorts(ports []int, fn func() ([]string, error)) ([]s
 	return fn()
 }
 
-func (s *Scanner) scanProxyCandidates(candidates []string, concurrency int, timeout time.Duration, verifier proxyVerifier) []ProxyScanResult {
+func (s *Scanner) scanProxyCandidates(candidates []string, concurrency int, timeout time.Duration, verifier proxyVerifier, transferModel string) []ProxyScanResult {
 	total := len(candidates)
 	if total == 0 {
 		return []ProxyScanResult{}
@@ -213,7 +216,7 @@ func (s *Scanner) scanProxyCandidates(candidates []string, concurrency int, time
 	// For HTTP proxies, use optimized 3-wave pipeline
 	if _, isHTTP := verifier.(httpVerifier); isHTTP {
 		s.logf("[TRACE] scanProxyCandidates: Using 3-wave HTTP proxy pipeline for %d candidates\n", total)
-		return s.scanProxyCandidatesWave3(candidates, timeout)
+		return s.scanProxyCandidatesWave3(candidates, timeout, transferModel)
 	}
 
 	// For SOCKS5, use simple verification
@@ -248,7 +251,11 @@ func (s *Scanner) scanProxyCandidates(candidates []string, concurrency int, time
 						Latency:  time.Since(start),
 						Tags:     s.profileProxyTags(endpoint, verifier, timeout),
 					}
-					result.DownloadKBps, result.UploadKBps = proxyTransferBenchmark(endpoint, verifier, timeout)
+					if transferModel == "brrr" {
+						result.DownloadKBps, result.UploadKBps = proxyTransferBenchmarkBrrr(endpoint, verifier, timeout)
+					} else {
+						result.DownloadKBps, result.UploadKBps = proxyTransferBenchmark(endpoint, verifier, timeout)
+					}
 					// Log benchmark results for diagnostics
 					if result.DownloadKBps > 0 || result.UploadKBps > 0 {
 						s.logf("[DEBUG] transfer benchmark %s down=%.1fKB/s up=%.1fKB/s\n", endpoint, result.DownloadKBps, result.UploadKBps)
@@ -284,7 +291,7 @@ func (s *Scanner) scanProxyCandidates(candidates []string, concurrency int, time
 // scanProxyCandidatesWave3 implements a per-candidate 3-wave pipeline.
 // Each candidate flows W1->W2->W3 independently (like Python), so slow W3
 // candidates do not block W1/W2 throughput for the rest of the set.
-func (s *Scanner) scanProxyCandidatesWave3(candidates []string, maxTimeout time.Duration) []ProxyScanResult {
+func (s *Scanner) scanProxyCandidatesWave3(candidates []string, maxTimeout time.Duration, transferModel string) []ProxyScanResult {
 	total := len(candidates)
 	s.logf("[TRACE] Pipelined Wave3 starting: total=%d candidates (w1=%d w2=%d w3=%d)\n", total, httpWave1Concurrency, httpWave2Concurrency, httpWave3Concurrency)
 	_ = maxTimeout
@@ -398,7 +405,11 @@ func (s *Scanner) scanProxyCandidatesWave3(candidates []string, maxTimeout time.
 					Latency:  time.Since(start),
 					Tags:     s.profileProxyTags(ep, httpVerifier{}, maxTimeout),
 				}
-				result.DownloadKBps, result.UploadKBps = proxyTransferBenchmark(ep, httpVerifier{}, maxTimeout)
+				if transferModel == "brrr" {
+					result.DownloadKBps, result.UploadKBps = proxyTransferBenchmarkBrrr(ep, httpVerifier{}, maxTimeout)
+				} else {
+					result.DownloadKBps, result.UploadKBps = proxyTransferBenchmark(ep, httpVerifier{}, maxTimeout)
+				}
 				if result.DownloadKBps > 0 || result.UploadKBps > 0 {
 					s.logf("[DEBUG] transfer benchmark %s down=%.1fKB/s up=%.1fKB/s\n", ep, result.DownloadKBps, result.UploadKBps)
 				} else {

@@ -1182,7 +1182,8 @@ func (m tuiModel) viewScanResults(w, h int) string {
 	if m.scanErr != nil {
 		body.WriteString(sError.Render("x "+m.scanErr.Error()) + "\n")
 	} else {
-		body.WriteString(sSuccess.Render(fmt.Sprintf("  Found %d results\n\n", len(m.scanResults))))
+		body.WriteString(sSuccess.Render(fmt.Sprintf("  Usable results: %d\n", len(m.scanResults))))
+		body.WriteString(sDim.Render("  failures stay in the log output only\n\n"))
 		start := m.cursor - visibleRows + 1
 		if start < 0 {
 			start = 0
@@ -1211,6 +1212,7 @@ func (m tuiModel) viewScanResults(w, h int) string {
 			if !strings.Contains(r, ":") && len(portLabel) > 0 {
 				r = fmt.Sprintf("%s:%s", r, portLabel)
 			}
+			r = "USABLE " + r
 			if len(r) > inner-6 {
 				r = r[:inner-6]
 			}
