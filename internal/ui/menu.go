@@ -1357,21 +1357,82 @@ func saveProxyResults(dataDir, exportFile, cacheFile string, proxies []string) e
 	return storage.AtomicWriteText(filepath.Join(dataDir, cacheFile), body)
 }
 
-func saveScanOutputResults(dataDir, scanKind string, endpoints []string) (string, error) {
+func saveScanOutputResults(dataDir, scanKind string, endpoints []string, operationType string) (string, error) {
 	if dataDir == "" {
 		dataDir = "."
 	}
 	if scanKind == "" {
 		scanKind = "scan"
 	}
-	lines := dedupeAndSortStrings(endpoints)
+
+	var cleaned []string
+	for _, ep := range endpoints {
+		if operationType != "sni_scanner" {
+			if parts := strings.Fields(ep); len(parts) > 1 && strings.Contains(parts[1], ":") {
+				cleaned = append(cleaned, parts[1])
+			} else if len(parts) > 0 && strings.Contains(parts[0], ":") {
+				cleaned = append(cleaned, parts[0])
+			} else {
+				cleaned = append(cleaned, ep)
+			}
+		} else {
+			cleaned = append(cleaned, ep)
+		}
+	}
+
+	lines := dedupeAndSortStrings(cleaned)
+	// write plain text file (passed endpoints)
 	body := fmt.Sprintf("# Passed endpoints\n# kind: %s\n# count: %d\n%s\n", scanKind, len(lines), strings.Join(lines, "\n"))
 	stamp := time.Now().Format("20060102-150405")
-	path := filepath.Join(dataDir, "scan_outputs", fmt.Sprintf("passed-%s-%s.txt", scanKind, stamp))
-	if err := storage.AtomicWriteText(path, body); err != nil {
+	outDir := filepath.Join(dataDir, "scan_outputs")
+	_ = os.MkdirAll(outDir, 0o755)
+	txtPath := filepath.Join(outDir, fmt.Sprintf("passed-%s-%s.txt", scanKind, stamp))
+	if err := storage.AtomicWriteText(txtPath, body); err != nil {
 		return "", err
 	}
-	return path, nil
+
+	// If SNI scanner, also write a CSV containing status per-host
+	if operationType == "sni_scanner" {
+		csvLines := make([]string, 0, len(endpoints)+1)
+		csvLines = append(csvLines, "hostname,ip,port,status,latency_ms,tls_version,http_status")
+		for _, ep := range endpoints {
+			// expected format: "hostname ip:port STATUS latency TLSVersion HTTPStatus"
+			parts := strings.Fields(ep)
+			if len(parts) < 3 {
+				// unknown format
+				csvLines = append(csvLines, fmt.Sprintf(",%s,,,,", ep))
+				continue
+			}
+			hostname := parts[0]
+			ipport := parts[1]
+			status := parts[2]
+			latency := ""
+			tlsv := ""
+			httpst := ""
+			if len(parts) >= 4 {
+				latency = parts[3]
+			}
+			if len(parts) >= 5 {
+				tlsv = parts[4]
+			}
+			if len(parts) >= 6 {
+				httpst = parts[5]
+			}
+			// normalize status to OK/FAIL/UNKNOWN
+			stat := strings.ToUpper(status)
+			if stat != "OK" && stat != "FAIL" {
+				stat = "UNKNOWN"
+			}
+			// build CSV line
+			csvLines = append(csvLines, fmt.Sprintf("%s,%s,%s,%s,%s,%s", hostname, ipport, status, latency, tlsv, httpst))
+		}
+		csvPath := filepath.Join(outDir, fmt.Sprintf("sni-%s-%s.csv", scanKind, stamp))
+		if err := storage.AtomicWriteText(csvPath, strings.Join(csvLines, "\n")); err != nil {
+			// ignore csv write failure but still return txt path
+		}
+	}
+
+	return txtPath, nil
 }
 
 func dedupeAndSortStrings(values []string) []string {

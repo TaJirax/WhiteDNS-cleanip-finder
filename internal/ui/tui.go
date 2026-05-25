@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"bufio"
 	"encoding/csv"
 	"fmt"
 	"io"
@@ -25,6 +26,69 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
+
+func hexToRGB(hex string) (int, int, int) {
+	hex = strings.TrimPrefix(strings.TrimSpace(hex), "#")
+	if len(hex) != 6 {
+		return 255, 255, 255
+	}
+	var r, g, b int
+	fmt.Sscanf(hex, "%02x%02x%02x", &r, &g, &b)
+	return r, g, b
+}
+
+func lerpHexColor(c1, c2 string, t float64) string {
+	r1, g1, b1 := hexToRGB(c1)
+	r2, g2, b2 := hexToRGB(c2)
+	ri := int(float64(r1) + (float64(r2)-float64(r1))*t)
+	gi := int(float64(g1) + (float64(g2)-float64(g1))*t)
+	bi := int(float64(b1) + (float64(b2)-float64(b1))*t)
+	return fmt.Sprintf("#%02x%02x%02x", ri, gi, bi)
+}
+
+func renderGradientText(text string, colors []string, bold bool) string {
+	if text == "" {
+		return ""
+	}
+	if len(colors) == 0 {
+		colors = []string{"#ffffff"}
+	}
+	runes := []rune(text)
+	if len(runes) == 0 {
+		return ""
+	}
+	if len(colors) == 1 {
+		style := lipgloss.NewStyle().Foreground(lipgloss.Color(colors[0]))
+		if bold {
+			style = style.Bold(true)
+		}
+		return style.Render(text)
+	}
+	var out strings.Builder
+	for i, r := range runes {
+		var color string
+		if len(runes) == 1 {
+			color = colors[0]
+		} else {
+			position := float64(i) / float64(len(runes)-1)
+			segment := position * float64(len(colors)-1)
+			left := int(math.Floor(segment))
+			if left >= len(colors)-1 {
+				left = len(colors) - 2
+			}
+			if left < 0 {
+				left = 0
+			}
+			color = lerpHexColor(colors[left], colors[left+1], segment-float64(left))
+		}
+		style := lipgloss.NewStyle().Foreground(lipgloss.Color(color))
+		if bold {
+			style = style.Bold(true)
+		}
+		out.WriteString(style.Render(string(r)))
+	}
+	return out.String()
+}
 
 // ------------------------------------------------------------
 //  Message types
@@ -354,17 +418,46 @@ func (m *tuiModel) loadASNFile() {
 	}
 	defer f.Close()
 
-	r := csv.NewReader(f)
-	r.Read() // skip header
+	r := bufio.NewReader(f)
+	parseLine := func(line string) ([]string, error) {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			return nil, nil
+		}
+		lineReader := csv.NewReader(strings.NewReader(line))
+		lineReader.FieldsPerRecord = -1
+		lineReader.LazyQuotes = true
+		return lineReader.Read()
+	}
 
 	// Group networks by ASN
 	asnMap := make(map[string]*asnEntry)
+	lineNo := 0
 	for {
-		rec, err := r.Read()
-		if err == io.EOF {
+		line, readErr := r.ReadString('\n')
+		if readErr != nil && readErr != io.EOF {
+			if len(line) == 0 {
+				m.addLog(fmt.Sprintf("Warning: could not read ASN file: %v", readErr))
+				return
+			}
+		}
+		if readErr == io.EOF && len(line) == 0 {
 			break
 		}
+
+		lineNo++
+		if lineNo == 1 {
+			if readErr == io.EOF {
+				break
+			}
+			continue
+		}
+
+		rec, err := parseLine(strings.TrimRight(line, "\r\n"))
 		if err != nil || len(rec) < 9 {
+			if readErr == io.EOF {
+				break
+			}
 			continue
 		}
 		asn := rec[5]
@@ -380,6 +473,10 @@ func (m *tuiModel) loadASNFile() {
 			}
 		}
 		asnMap[asn].Networks = append(asnMap[asn].Networks, network)
+
+		if readErr == io.EOF {
+			break
+		}
 	}
 
 	// Convert to sorted list
@@ -503,9 +600,18 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.scanCurrentIP = v.currentIP
 		m.scanTotalIPs = v.totalIPs
 		m.writeScanLogLine(fmt.Sprintf("[PROGRESS] processed=%d/%d hits=%d current=%s totalIPs=%d", v.current, v.total, v.hits, v.currentIP, v.totalIPs))
-		if v.currentIP != "" && v.hits > prevHits {
-			if len(m.scanResults) == 0 || m.scanResults[len(m.scanResults)-1] != v.currentIP {
-				m.scanResults = append(m.scanResults, v.currentIP)
+		if v.currentIP != "" {
+			if m.operationType == "sni_scanner" {
+				// v.currentIP contains the full result string for SNI
+				if strings.Contains(v.currentIP, " OK ") {
+					if len(m.scanResults) == 0 || m.scanResults[len(m.scanResults)-1] != v.currentIP {
+						m.scanResults = append(m.scanResults, v.currentIP)
+					}
+				}
+			} else if v.hits > prevHits {
+				if len(m.scanResults) == 0 || m.scanResults[len(m.scanResults)-1] != v.currentIP {
+					m.scanResults = append(m.scanResults, v.currentIP)
+				}
 			}
 		}
 		// Re-arm wait for next message so UI keeps consuming from the channel
@@ -668,8 +774,8 @@ func (m tuiModel) viewMenu(w, h int) string {
 	inner := w - 6 // account for panel border+padding
 
 	// Title bar
-	titleBar := sTitle.Render("WHITEDNS v1") + "  " +
-		sDim.Render("developed by ashentajir") + "  " +
+	titleBar := renderGradientText("WHITEDNS v1", []string{"#ff0000", "#ff0000"}, true) + "  " +
+		renderGradientText("developed by ashentajir", []string{"#00d1ff", "#8a2be2", "#ff0000"}, false) + "  " +
 		sDim.Render(fmt.Sprintf("port:%d  logs:%d  %s", m.app.Cfg.ProxyPort, len(m.logs), time.Now().Format("15:04:05")))
 	accentBar := lipgloss.NewStyle().Foreground(cAccent).Render(strings.Repeat("-", inner-1))
 
@@ -1077,7 +1183,7 @@ func (m tuiModel) viewScanning(w, h int) string {
 			left += lipgloss.NewStyle().Foreground(lipgloss.Color(col)).Render("█")
 		}
 	}
-	empty := sDim.Render(strings.Repeat("-", barW-filled))
+	empty := sDim.Render(strings.Repeat("░", barW-filled))
 	bar := left + empty + "  " + sAccent.Render(fmt.Sprintf("%3d%%", int(progress*100)))
 
 	stats := fmt.Sprintf("  Processed: %s/%s   Found: %s   IPs: %s",
@@ -1123,24 +1229,60 @@ func (m tuiModel) viewScanning(w, h int) string {
 
 	// Live hits appear under the activity log so the progress area stays clean
 	var liveRows strings.Builder
-	n := len(m.scanResults)
-	liveCount := h / 8
-	if liveCount < 3 {
-		liveCount = 3
-	}
-	if liveCount > 6 {
-		liveCount = 6
-	}
-	start := n - liveCount
-	if start < 0 {
-		start = 0
-	}
-	for i := start; i < n; i++ {
-		r := m.scanResults[i]
-		if len(r) > inner-6 {
-			r = r[:inner-6]
+	// For SNI scanner we only show passed (OK) entries in the live view.
+	if m.operationType == "sni_scanner" {
+		// collect last N passed entries
+		n := len(m.scanResults)
+		liveCount := h / 8
+		if liveCount < 3 {
+			liveCount = 3
 		}
-		liveRows.WriteString(sSuccess.Render("  > "+r) + "\n")
+		if liveCount > 6 {
+			liveCount = 6
+		}
+		collected := make([]string, 0, liveCount)
+		for i := n - 1; i >= 0 && len(collected) < liveCount; i-- {
+			r := m.scanResults[i]
+			if strings.Contains(r, " OK ") {
+				if len(r) > inner-6 {
+					r = r[:inner-6]
+				}
+				collected = append(collected, r)
+			}
+		}
+		for i := len(collected) - 1; i >= 0; i-- {
+			liveRows.WriteString(sSuccess.Render("  > "+collected[i]) + "\n")
+		}
+	} else {
+		n := len(m.scanResults)
+		liveCount := h / 8
+		if liveCount < 3 {
+			liveCount = 3
+		}
+		if liveCount > 6 {
+			liveCount = 6
+		}
+		start := n - liveCount
+		if start < 0 {
+			start = 0
+		}
+		for i := start; i < n; i++ {
+			r := m.scanResults[i]
+			// Other scans: strip extra proxy tags, just show IP:Port
+			if !strings.Contains(r, ":") && len(portLabel) > 0 {
+				r = fmt.Sprintf("%s:%s", r, portLabel)
+			}
+			endpoint := r
+			if parts := strings.Fields(r); len(parts) > 1 && strings.Contains(parts[1], ":") {
+				endpoint = parts[1]
+			} else if len(parts) > 0 && strings.Contains(parts[0], ":") {
+				endpoint = parts[0]
+			}
+			if len(endpoint) > inner-6 {
+				endpoint = endpoint[:inner-6]
+			}
+			liveRows.WriteString(sSuccess.Render("  > "+endpoint) + "\n")
+		}
 	}
 
 	headerBlock := m.spinner.View() + "  " + sHeader.Render(" "+opLabel+" ") + "\n\n"
@@ -1196,15 +1338,39 @@ func (m tuiModel) viewScanResults(w, h int) string {
 	if m.scanErr != nil {
 		body.WriteString(sError.Render("x "+m.scanErr.Error()) + "\n")
 	} else {
-		body.WriteString(sSuccess.Render(fmt.Sprintf("  Usable results: %d\n", len(m.scanResults))))
+		passedCount := len(m.scanResults)
+		if m.operationType == "sni_scanner" {
+			passedCount = m.scanHits
+		}
+		body.WriteString(sSuccess.Render(fmt.Sprintf("  Usable results: %d\n", passedCount)))
 		body.WriteString(sDim.Render("  failures stay in the log output only\n\n"))
+		// Build display list: for SNI show only passed (OK) entries, failures remain only in logs/files
+		displayResults := m.scanResults
+		if m.operationType == "sni_scanner" {
+			filt := make([]string, 0, len(m.scanResults))
+			for _, r := range m.scanResults {
+				if strings.Contains(r, " OK ") {
+					filt = append(filt, r)
+				}
+			}
+			displayResults = filt
+		}
+
+		// Clamp cursor to displayResults
+		if m.cursor >= len(displayResults) {
+			m.cursor = len(displayResults) - 1
+		}
+		if m.cursor < 0 {
+			m.cursor = 0
+		}
+
 		start := m.cursor - visibleRows + 1
 		if start < 0 {
 			start = 0
 		}
 		end := start + visibleRows
-		if end > len(m.scanResults) {
-			end = len(m.scanResults)
+		if end > len(displayResults) {
+			end = len(displayResults)
 		}
 		// Determine display ports: prefer explicit scanConfig, then scanner targets, then sensible defaults
 		displayPorts := m.scanConfig.Ports
@@ -1222,19 +1388,73 @@ func (m tuiModel) viewScanResults(w, h int) string {
 		portLabel := strings.Join(portStrs, ",")
 
 		for i := start; i < end; i++ {
-			r := m.scanResults[i]
-			if !strings.Contains(r, ":") && len(portLabel) > 0 {
-				r = fmt.Sprintf("%s:%s", r, portLabel)
+			r := displayResults[i]
+
+			// For SNI, it might contain the full text "hostname ip OK/FAIL ... "
+			// Wait, the dynamic append adds just IP. Let's fix that.
+			if m.operationType != "sni_scanner" {
+				if !strings.Contains(r, ":") && len(portLabel) > 0 {
+					r = fmt.Sprintf("%s:%s", r, portLabel)
+				}
 			}
-			r = "USABLE " + r
-			if len(r) > inner-6 {
-				r = r[:inner-6]
-			}
-			if i == m.cursor {
-				body.WriteString(sSelected.Render(r) + "\n")
+
+			// Color logic
+			isCursor := (i == m.cursor)
+			var rendered string
+
+			if m.operationType == "sni_scanner" {
+				// SNI scan: mark OK as green, FAIL as red. And show USABLE for passes.
+				if strings.Contains(r, " OK ") {
+					r = "USABLE " + r
+					if len(r) > inner-6 {
+						r = r[:inner-6]
+					}
+					if isCursor {
+						rendered = sSelected.Render(r)
+					} else {
+						rendered = sSuccess.Render("  " + r)
+					}
+				} else if strings.Contains(r, " FAIL ") {
+					if len(r) > inner-6 {
+						r = r[:inner-6]
+					}
+					if isCursor {
+						rendered = lipgloss.NewStyle().Bold(true).Foreground(cRed).Render("> " + r)
+					} else {
+						rendered = sError.Render("  " + r)
+					}
+				} else {
+					// Fallback for live IP updates during SNI scan
+					if len(r) > inner-6 {
+						r = r[:inner-6]
+					}
+					if isCursor {
+						rendered = sSelected.Render(r)
+					} else {
+						rendered = sDim.Render("  " + r)
+					}
+				}
 			} else {
-				body.WriteString("  " + r + "\n")
+				// Other 3 scans: only IP:port in green, no USABLE tag
+				// extract just the ip and port if it contains proxy formatted string
+				endpoint := r
+				if parts := strings.Fields(r); len(parts) > 1 && strings.Contains(parts[1], ":") {
+					endpoint = parts[1] // handles "http 1.2.3.4:80 lat=..."
+				} else if len(parts) > 0 && strings.Contains(parts[0], ":") {
+					endpoint = parts[0]
+				}
+
+				if len(endpoint) > inner-6 {
+					endpoint = endpoint[:inner-6]
+				}
+				if isCursor {
+					rendered = sSelected.Render(endpoint)
+				} else {
+					rendered = sSuccess.Render("  " + endpoint)
+				}
 			}
+
+			body.WriteString(rendered + "\n")
 		}
 		if len(m.scanResults) > visibleRows {
 			body.WriteString(sDim.Render(fmt.Sprintf("\n  [%d/%d]", m.cursor+1, len(m.scanResults))))
@@ -1876,7 +2096,7 @@ func (m tuiModel) handleScanningScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 			if kind == "" {
 				kind = m.scanKind
 			}
-			if path, err := saveScanOutputResults(m.app.DataDir, kind, m.scanResults); err != nil {
+			if path, err := saveScanOutputResults(m.app.DataDir, kind, m.scanResults, m.operationType); err != nil {
 				m.addLog(fmt.Sprintf("Failed to save scan output: %v", err))
 				m.setToast(sError.Render("x Save failed"), 3*time.Second)
 			} else {
@@ -2054,7 +2274,7 @@ func (m tuiModel) handleScanResultsScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 			if kind == "" {
 				kind = m.scanKind
 			}
-			if path, err := saveScanOutputResults(m.app.DataDir, kind, m.scanResults); err != nil {
+			if path, err := saveScanOutputResults(m.app.DataDir, kind, m.scanResults, m.operationType); err != nil {
 				m.addLog(fmt.Sprintf("Failed to save scan output: %v", err))
 				m.setToast(sError.Render("x Save failed"), 3*time.Second)
 			} else {
@@ -2086,7 +2306,7 @@ func (m tuiModel) handleScanComplete(msg scanCompleteMsg) (tuiModel, tea.Cmd) {
 		m.writeScanLogLine(fmt.Sprintf("[COMPLETE] scan failed: %v", msg.err))
 	} else {
 		m.writeScanLogLine(fmt.Sprintf("[COMPLETE] scan done: %d proxies in %s", len(msg.proxies), msg.duration))
-		if path, err := saveScanOutputResults(m.app.DataDir, m.scanKind, m.scanResults); err != nil {
+		if path, err := saveScanOutputResults(m.app.DataDir, m.scanKind, m.scanResults, m.operationType); err != nil {
 			m.addLog(fmt.Sprintf("Failed to save scan output: %v", err))
 		} else {
 			m.addLog(fmt.Sprintf("Saved scan output to %s", path))
@@ -2149,7 +2369,7 @@ func (m tuiModel) handlePoolOperationComplete(msg poolOperationCompleteMsg) (tui
 			} else if scanKind == "sni_scanner" {
 				scanKind = "sniscan"
 			}
-			if path, err := saveScanOutputResults(m.app.DataDir, scanKind, m.scanResults); err != nil {
+			if path, err := saveScanOutputResults(m.app.DataDir, scanKind, m.scanResults, m.operationType); err != nil {
 				m.addLog(fmt.Sprintf("Failed to save scan output: %v", err))
 			} else {
 				m.addLog(fmt.Sprintf("Saved scan output to %s", path))
@@ -2208,10 +2428,10 @@ func (m tuiModel) cmdScanWithConfig(targets []string, cfg scanConfig, scanKind s
 			timeout = 30 * time.Second
 		}
 		opts := scanner.ProxyScanOptions{
-			Ports:       ports,
-			Discovery:   disc,
-			Concurrency: conc,
-			Timeout:     timeout,
+			Ports:         ports,
+			Discovery:     disc,
+			Concurrency:   conc,
+			Timeout:       timeout,
 			TransferModel: strings.TrimSpace(cfg.TransferModel),
 		}
 		var proxies []string
@@ -2373,11 +2593,12 @@ func (m tuiModel) cmdPoolOperation(opType string, asnNetworks []string) tea.Cmd 
 						default:
 						}
 						// forward progress update
-						msg := scanProgressMsg{current: processed, total: totalProbes, hits: hits, startTime: startScan, currentIP: pr.IP, totalIPs: len(targets)}
+						msg := scanProgressMsg{current: processed, total: totalProbes, hits: hits, startTime: startScan, currentIP: text, totalIPs: len(targets)}
 						select {
 						case ch <- msg:
 						default:
 						}
+						// Only keep successful results for the final menu list
 						if pr.Success {
 							sniResults = append(sniResults, text)
 						}
@@ -2487,10 +2708,10 @@ func (m tuiModel) cmdProxyScan(targets []string, cfg scanConfig, scanKind string
 				timeout = 30 * time.Second
 			}
 			opts := scanner.ProxyScanOptions{
-				Ports:       ports,
-				Discovery:   disc,
-				Concurrency: conc,
-				Timeout:     timeout,
+				Ports:         ports,
+				Discovery:     disc,
+				Concurrency:   conc,
+				Timeout:       timeout,
 				TransferModel: strings.TrimSpace(cfg.TransferModel),
 			}
 
@@ -2764,7 +2985,18 @@ func (m *tuiModel) appendNewScanResultsToFile() {
 		if m.scanOutputWritten[ep] {
 			continue
 		}
-		if err := storage.AppendLine(m.scanOutputPath, ep); err != nil {
+
+		outEp := ep
+		if m.operationType != "sni_scanner" {
+			// strip tags and extract just IP:port
+			if parts := strings.Fields(ep); len(parts) > 1 && strings.Contains(parts[1], ":") {
+				outEp = parts[1] // handles "http 1.2.3.4:80 lat=..."
+			} else if len(parts) > 0 && strings.Contains(parts[0], ":") {
+				outEp = parts[0]
+			}
+		}
+
+		if err := storage.AppendLine(m.scanOutputPath, outEp); err != nil {
 			m.writeScanLogLine(fmt.Sprintf("[OUTPUT] append failed: %v", err))
 			// don't mark as written on error
 			continue

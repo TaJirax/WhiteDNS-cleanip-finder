@@ -1,8 +1,10 @@
 package asn
 
 import (
+	"bufio"
 	"encoding/csv"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -134,22 +136,44 @@ func (e *ASNEngine) loadCSV(filePath string, isV4 bool) error {
 	}
 	defer file.Close()
 
-	reader := csv.NewReader(file)
-	reader.FieldsPerRecord = -1 // allow variable fields
-	reader.LazyQuotes = true    // Allow bare quotes in fields (like Python CSV)
+	reader := bufio.NewReader(file)
+	lineNo := 0
 
-	// Skip header
-	if _, err := reader.Read(); err != nil {
-		return err
+	parseLine := func(line string) ([]string, error) {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			return nil, nil
+		}
+		lineReader := csv.NewReader(strings.NewReader(line))
+		lineReader.FieldsPerRecord = -1 // allow variable fields
+		lineReader.LazyQuotes = true    // tolerate malformed quote usage in source data
+		return lineReader.Read()
 	}
 
 	for {
-		record, err := reader.Read()
-		if err != nil {
+		line, readErr := reader.ReadString('\n')
+		if readErr != nil && readErr != io.EOF {
+			if len(line) == 0 {
+				return readErr
+			}
+		}
+		if readErr == io.EOF && len(line) == 0 {
 			break
 		}
 
-		if len(record) < 9 {
+		lineNo++
+		if lineNo == 1 {
+			if readErr == io.EOF {
+				break
+			}
+			continue
+		}
+
+		record, err := parseLine(strings.TrimRight(line, "\r\n"))
+		if err != nil || len(record) < 9 {
+			if readErr == io.EOF {
+				break
+			}
 			continue
 		}
 
@@ -171,6 +195,10 @@ func (e *ASNEngine) loadCSV(filePath string, isV4 bool) error {
 				ipnet = &net.IPNet{IP: ip, Mask: net.CIDRMask(128, 128)}
 			}
 
+		}
+
+		if readErr == io.EOF {
+			break
 		}
 
 		entry := asnEntry{
