@@ -1,5 +1,5 @@
 ﻿# Cross-platform build script for whitedns
-# Builds for: Windows (current), Linux AMD64, Linux ARM64, Termux (Android ARM64)
+# Builds for: Windows (current), Linux AMD64, Linux ARM64, macOS AMD64, macOS ARM64, Termux (Android ARM64)
 
 param(
     [switch]$CleanBuild,
@@ -100,6 +100,8 @@ $Builds = @(
     @{ OS = "windows"; Arch = "amd64"; OutputName = "whitedns-windows-amd64.exe"; Description = "Windows 64-bit (AMD64)" },
     @{ OS = "linux"; Arch = "amd64"; OutputName = "whitedns-linux-amd64"; Description = "Linux 64-bit (AMD64)" },
     @{ OS = "linux"; Arch = "arm64"; OutputName = "whitedns-linux-arm64"; Description = "Linux ARM64 (Raspberry Pi, servers)" },
+    @{ OS = "darwin"; Arch = "amd64"; OutputName = "whitedns-macos-amd64"; Description = "macOS 64-bit (Intel AMD64)" },
+    @{ OS = "darwin"; Arch = "arm64"; OutputName = "whitedns-macos-arm64"; Description = "macOS ARM64 (Apple Silicon)" },
     @{ OS = "android"; Arch = "arm64"; OutputName = "whitedns-termux-arm64"; Description = "Termux/Android ARM64" }
 )
 

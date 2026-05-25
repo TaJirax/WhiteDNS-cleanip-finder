@@ -809,7 +809,7 @@ func (a *App) handleProxyScanner(label string, defaultPorts []int, defaultDiscov
 	fmt.Println()
 	fmt.Println(" TRANSFER BENCHMARK MODEL")
 	fmt.Println(" [1] Old (stable)")
-	fmt.Println(" [2] Brrr (fast)")
+	fmt.Println(" [2] goBrrrr (fast)")
 	fmt.Print("Choice [1/2]: ")
 	tmChoice := strings.TrimSpace(a.readLineInput())
 	transferModel := "old"

@@ -74,6 +74,7 @@ const (
 	screenReviewTargets     = "review_targets"
 	screenSelectPorts       = "select_ports"
 	screenSelectMethod      = "select_scan_method"
+	screenSelectTransfer    = "select_transfer_mode"
 	screenSelectConcurrency = "select_concurrency"
 	screenScanning          = "scanning"
 	screenInstantConnect    = "instant_connect"
@@ -109,6 +110,7 @@ type scanConfig struct {
 	Ports                     []int
 	PortsString               string
 	Method                    string
+	TransferModel             string
 	FilterType                string
 	Concurrency               int
 	AdaptiveDomainConcurrency int
@@ -217,6 +219,7 @@ type tuiModel struct {
 
 	portPresets        []portPreset
 	methodOptions      []string
+	transferOptions    []string
 	concurrencyOptions []string
 	selectedItems      map[int]bool
 	scanKind           string
@@ -298,7 +301,7 @@ func NewTUI(a *App) *tuiModel {
 		logs:          []string{},
 		operationType: "scan",
 		stepData:      make(map[string]string),
-		scanConfig:    scanConfig{Concurrency: 250},
+		scanConfig:    scanConfig{Concurrency: 250, TransferModel: "old"},
 		portPresets: []portPreset{
 			{label: "80 - HTTP only", ports: "80"},
 			{label: "443 - HTTPS only", ports: "443"},
@@ -321,6 +324,7 @@ func NewTUI(a *App) *tuiModel {
 			{label: "Custom - Type ports manually", ports: ""},
 		},
 		methodOptions:      []string{"Direct (fast, in-process)", "Masscan preflight", "Nmap preflight"},
+		transferOptions:    []string{"Old transfer model (stable)", "goBrrrr transfer mode (fast)"},
 		concurrencyOptions: []string{"Low (50)", "Medium (250)", "High (500)", "Very High (1000)", "Max (2000)", "Extreme (5000)"},
 		selectedItems:      make(map[int]bool),
 		scanKind:           "http",
@@ -550,6 +554,8 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m, screenCmd = m.handleSelectPortsScreen(msg)
 	case screenSelectMethod:
 		m, screenCmd = m.handleSelectMethodScreen(msg)
+	case screenSelectTransfer:
+		m, screenCmd = m.handleSelectTransferScreen(msg)
 	case screenSelectConcurrency:
 		m, screenCmd = m.handleSelectConcurrencyScreen(msg)
 	case screenScanning:
@@ -605,6 +611,8 @@ func (m tuiModel) View() string {
 		body = m.viewSelectPorts(w, h)
 	case screenSelectMethod:
 		body = m.viewSelectMethod(w, h)
+	case screenSelectTransfer:
+		body = m.viewSelectTransfer(w, h)
 	case screenSelectConcurrency:
 		body = m.viewSelectConcurrency(w, h)
 	case screenScanning:
@@ -994,6 +1002,12 @@ func (m tuiModel) viewSelectMethod(w, h int) string {
 	}
 
 	return m.viewList(w, h, "SCAN METHOD", labels, help)
+}
+
+func (m tuiModel) viewSelectTransfer(w, h int) string {
+	labels := make([]string, len(m.transferOptions))
+	copy(labels, m.transferOptions)
+	return m.viewList(w, h, "TRANSFER MODE", labels, "↑↓ navigate  ·  Enter select  ·  Esc back")
 }
 
 func (m tuiModel) viewSelectConcurrency(w, h int) string {
@@ -1728,7 +1742,36 @@ func (m tuiModel) handleSelectMethodScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 		methods := []string{"direct", "masscan", "nmap"}
 		m.scanConfig.Method = methods[m.cursor]
 		m.addLog(fmt.Sprintf("OK Scan method: %s", strings.ToUpper(m.scanConfig.Method)))
+		if m.scanKind == "http" || m.scanKind == "socks5" {
+			m.pushScreen(screenSelectTransfer)
+			m.cursor = 0
+			return m, nil
+		}
 
+		m.pushScreen(screenSelectConcurrency)
+		m.cursor = 1
+	}
+	return m, nil
+}
+
+func (m tuiModel) handleSelectTransferScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
+	k, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return m, nil
+	}
+	switch k.String() {
+	case "up", "k":
+		if m.cursor > 0 {
+			m.cursor--
+		}
+	case "down", "j":
+		if m.cursor < len(m.transferOptions)-1 {
+			m.cursor++
+		}
+	case "enter":
+		models := []string{"old", "brrr"}
+		m.scanConfig.TransferModel = models[m.cursor]
+		m.addLog(fmt.Sprintf("OK Transfer mode: %s", strings.ToUpper(m.scanConfig.TransferModel)))
 		m.pushScreen(screenSelectConcurrency)
 		m.cursor = 1
 	}
@@ -2169,6 +2212,7 @@ func (m tuiModel) cmdScanWithConfig(targets []string, cfg scanConfig, scanKind s
 			Discovery:   disc,
 			Concurrency: conc,
 			Timeout:     timeout,
+			TransferModel: strings.TrimSpace(cfg.TransferModel),
 		}
 		var proxies []string
 		var err error
@@ -2447,6 +2491,7 @@ func (m tuiModel) cmdProxyScan(targets []string, cfg scanConfig, scanKind string
 				Discovery:   disc,
 				Concurrency: conc,
 				Timeout:     timeout,
+				TransferModel: strings.TrimSpace(cfg.TransferModel),
 			}
 
 			// Forward logs to UI with short timeout to avoid blocking scanner
@@ -2621,7 +2666,7 @@ func (m *tuiModel) gotoScanMode(opType, kind string) {
 	m.screen = screenScanMode
 	m.operationType = opType
 	m.scanKind = kind
-	m.scanConfig = scanConfig{}
+	m.scanConfig = scanConfig{TransferModel: "old"}
 	m.cursor = 0
 	m.selectedItems = make(map[int]bool)
 }

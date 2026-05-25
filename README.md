@@ -69,6 +69,8 @@ Generated artifacts (local run):
 - `builds/whitedns-windows-amd64.exe`
 - `builds/whitedns-linux-amd64`
 - `builds/whitedns-linux-arm64`
+- `builds/whitedns-macos-amd64`
+- `builds/whitedns-macos-arm64`
 - `builds/whitedns-termux-arm64`
 
 The `builds/` directory also includes required data files copied during the build (e.g., `IranASNs/`, `assets/`).

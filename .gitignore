@@ -31,6 +31,8 @@ test/*_output.txt
 
 # Local scratch files
 New Text Document.txt
+*.txt
+*.bat
 *.bak
 *.swp
 *.swo
