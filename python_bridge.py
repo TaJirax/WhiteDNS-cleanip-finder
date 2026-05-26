@@ -86,6 +86,16 @@ def _run_action(action):
     elif action == "sni_scanner":
         import cores.sni_scanner as sni_core
         _execute_core(sni_core)
+    elif action == "config_maker":
+        # Execute the standalone config maker script (resides in 'config maker' folder)
+        import runpy
+        here = os.path.abspath(os.path.dirname(__file__))
+        script_path = os.path.join(here, "..", "config maker", "config_maker.py")
+        script_path = os.path.abspath(script_path)
+        if not os.path.exists(script_path):
+            print(f"Config maker script not found: {script_path}")
+            return
+        runpy.run_path(script_path, run_name="__main__")
     elif action == "start_white_proxy":
         APP_SERVICE.set_connection_mode("white_ip", persist=True)
         import cores.white_core as proxy_core

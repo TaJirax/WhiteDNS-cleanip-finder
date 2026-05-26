@@ -18,8 +18,8 @@ func ProbeOne(ip, hostname string, port int, timeout time.Duration) ProbeResult 
 	r := ProbeResult{IP: ip, Hostname: hostname, Port: port, ScannedAt: time.Now()}
 	start := time.Now()
 
-	// allow a couple of small retries for transient network failures
-	attempts := 2
+	// allow a couple of retries with exponential backoff for transient failures
+	attempts := 3
 	var conn net.Conn
 	var err error
 	for attempt := 0; attempt < attempts; attempt++ {
@@ -30,8 +30,9 @@ func ProbeOne(ip, hostname string, port int, timeout time.Duration) ProbeResult 
 		if err == nil {
 			break
 		}
-		// small backoff before retrying
-		time.Sleep(100 * time.Millisecond)
+		// exponential backoff (100ms, 200ms, 400ms...)
+		backoff := time.Duration(100*(1<<attempt)) * time.Millisecond
+		time.Sleep(backoff)
 	}
 	if err != nil {
 		r.Error = err.Error()

@@ -304,6 +304,8 @@ type tuiModel struct {
 	transferLogMu   *sync.Mutex
 	// incremental scan output file (written as results are discovered)
 	scanOutputPath    string
+	scanFailedPath    string
+	scanCSVPath       string
 	scanOutputWritten map[string]bool
 	scanOutputMu      *sync.Mutex
 	// pasteConfirm: used to avoid immediate submission when pasting multi-line targets
@@ -348,6 +350,7 @@ func NewTUI(a *App) *tuiModel {
 		{key: "f", label: "Install MMDF CA", action: "install_mmdf_ca"},
 		{key: "g", label: "Desync Scanner", action: "desync_scanner"},
 		{key: "M", label: "Manage SNI Probe Domains", action: "manage_tls_probe"},
+		{key: "C", label: "Config Maker", action: "config_maker"},
 		{key: "n", label: "Configure Desync", action: "configure_desync"},
 		{key: "x", label: "Clear Cache", action: "clear_cache"},
 		{key: "w", label: "Start Proxy (White)", action: "start_proxy_white"},
@@ -1606,6 +1609,9 @@ func (m tuiModel) activateMenuItem() (tuiModel, tea.Cmd) {
 	case "sni_scanner":
 		m.addLog("SNI Scanner (TLS Hostname Probe) selected")
 		m.gotoScanMode("sni_scanner", "sni_scanner")
+	case "config_maker":
+		m.addLog("Launching Config Maker...")
+		return m, m.cmdBridgeAction("config_maker")
 	case "manage_tls_probe":
 		m.pushScreen(screenManageTLSProbe)
 		m.tiStep = 1
@@ -2592,6 +2598,23 @@ func (m tuiModel) cmdPoolOperation(opType string, asnNetworks []string) tea.Cmd 
 						case ch <- logMsg{text: text}:
 						default:
 						}
+
+						// Write incremental CSV and failed/passed files so results are available in real-time
+						if m.scanCSVPath != "" {
+							csvLine := fmt.Sprintf("%s,%s:%d,%s,%d,%s,%d", pr.Hostname, pr.IP, pr.Port, statusLabel, int(pr.LatencyMs), pr.TLSVersion, pr.HTTPStatus)
+							_ = storage.AppendLine(m.scanCSVPath, csvLine)
+						}
+
+						if !pr.Success {
+							if m.scanFailedPath != "" {
+								_ = storage.AppendLine(m.scanFailedPath, text)
+							}
+						} else {
+							// record passed ip:port to incremental passed file
+							if m.scanOutputPath != "" {
+								_ = storage.AppendLine(m.scanOutputPath, fmt.Sprintf("%s:%d", pr.IP, pr.Port))
+							}
+						}
 						// forward progress update
 						msg := scanProgressMsg{current: processed, total: totalProbes, hits: hits, startTime: startScan, currentIP: text, totalIPs: len(targets)}
 						select {
@@ -2957,6 +2980,23 @@ func (m *tuiModel) startScanLogFile(scanKind string, targets []string, ports []i
 		// create initial file (overwrite if somehow exists)
 		_ = storage.AtomicWriteText(outPath, header)
 		m.scanOutputPath = outPath
+
+		// if SNI scanner, also prepare failed and CSV incremental files
+		if scanKind == "sni_scanner" || m.operationType == "sni_scanner" {
+			failedPath := filepath.Join(outDir, fmt.Sprintf("failed-%s-%s.txt", scanKind, stamp))
+			if absFailed, err := filepath.Abs(failedPath); err == nil {
+				failedPath = absFailed
+			}
+			_ = storage.AtomicWriteText(failedPath, fmt.Sprintf("# Failed endpoints\n# kind: %s\n# partial: true\n\n", scanKind))
+			m.scanFailedPath = failedPath
+
+			csvPath := filepath.Join(outDir, fmt.Sprintf("sni-%s-%s.csv", scanKind, stamp))
+			if absCSV, err := filepath.Abs(csvPath); err == nil {
+				csvPath = absCSV
+			}
+			_ = storage.AtomicWriteText(csvPath, "hostname,ipport,status,latency_ms,tls_version,http_status\n")
+			m.scanCSVPath = csvPath
+		}
 		// reset tracking
 		m.scanOutputMu.Lock()
 		m.scanOutputWritten = make(map[string]bool)
@@ -2994,13 +3034,72 @@ func (m *tuiModel) appendNewScanResultsToFile() {
 			} else if len(parts) > 0 && strings.Contains(parts[0], ":") {
 				outEp = parts[0]
 			}
+			if err := storage.AppendLine(m.scanOutputPath, outEp); err != nil {
+				m.writeScanLogLine(fmt.Sprintf("[OUTPUT] append failed: %v", err))
+				// don't mark as written on error
+				continue
+			}
+		} else {
+			// SNI scanner: separate passed and failed into different files and write CSV
+			passed := strings.Contains(strings.ToUpper(ep), " OK ") || strings.Contains(strings.ToUpper(ep), " OK")
+			failed := strings.Contains(strings.ToUpper(ep), " FAIL ") || strings.Contains(strings.ToUpper(ep), " FAIL")
+
+			// parse components for CSV
+			parts := strings.Fields(ep)
+			hostname := ""
+			ipport := ""
+			status := "UNKNOWN"
+			latency := ""
+			tlsv := ""
+			httpst := ""
+			if len(parts) >= 1 {
+				hostname = parts[0]
+			}
+			if len(parts) >= 2 {
+				ipport = parts[1]
+			}
+			if len(parts) >= 3 {
+				status = parts[2]
+			}
+			if len(parts) >= 4 {
+				latency = parts[3]
+			}
+			if len(parts) >= 5 {
+				tlsv = parts[4]
+			}
+			if len(parts) >= 6 {
+				httpst = parts[5]
+			}
+
+			// write passed to incremental passed file
+			if passed {
+				// prefer ip:port only in passed file
+				epOut := ipport
+				if epOut == "" {
+					epOut = outEp
+				}
+				if err := storage.AppendLine(m.scanOutputPath, epOut); err != nil {
+					m.writeScanLogLine(fmt.Sprintf("[OUTPUT] append passed failed: %v", err))
+					continue
+				}
+			}
+
+			// write failed entries to failed file (so they don't appear in UI)
+			if failed && m.scanFailedPath != "" {
+				if err := storage.AppendLine(m.scanFailedPath, ep); err != nil {
+					m.writeScanLogLine(fmt.Sprintf("[OUTPUT] append failed file failed: %v", err))
+				}
+			}
+
+			// append CSV line if csv path available
+			if m.scanCSVPath != "" {
+				csvLine := fmt.Sprintf("%s,%s,%s,%s,%s,%s", hostname, ipport, status, latency, tlsv, httpst)
+				if err := storage.AppendLine(m.scanCSVPath, csvLine); err != nil {
+					m.writeScanLogLine(fmt.Sprintf("[OUTPUT] append csv failed: %v", err))
+				}
+			}
 		}
 
-		if err := storage.AppendLine(m.scanOutputPath, outEp); err != nil {
-			m.writeScanLogLine(fmt.Sprintf("[OUTPUT] append failed: %v", err))
-			// don't mark as written on error
-			continue
-		}
 		m.scanOutputWritten[ep] = true
 	}
 }

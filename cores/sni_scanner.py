@@ -11,7 +11,14 @@ from utils import config
 from utils import asn_engine
 from utils import paths
 from utils import data_store
+from utils import storage
 from utils.helpers import clear_screen
+
+# Scanner tuning defaults
+DEFAULT_CONNECT_TIMEOUT = 3.0
+DEFAULT_READ_TIMEOUT = 3.0
+DEFAULT_RETRIES = 2
+DEFAULT_BACKOFF = 1.5
 
 async def verify_clean_ip(ip):
     """
@@ -22,45 +29,51 @@ async def verify_clean_ip(ip):
     ssl_ctx.check_hostname = False
     ssl_ctx.verify_mode = ssl.CERT_NONE
     
-    try:
-        # 1. Quick TCP Check (Fail fast if completely blocked)
-        reader, writer = await asyncio.wait_for(asyncio.open_connection(ip, 443), timeout=2.0)
-        writer.close()
-        await writer.wait_closed()
-        
-        # 2. Deep TLS & HTTP Verification
-        reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(ip, 443, ssl=ssl_ctx, server_hostname="speed.cloudflare.com"),
-            timeout=3.0
-        )
-        
-        probe = b"GET / HTTP/1.1\r\nHost: speed.cloudflare.com\r\nUser-Agent: Mozilla/5.0\r\nConnection: close\r\n\r\n"
-        writer.write(probe)
-        await writer.drain()
-        
-        resp = await asyncio.wait_for(reader.read(4096), timeout=3.0)
-        writer.close()
-        await writer.wait_closed()
-        
-        if not resp: 
-            return False
-            
-        resp_lower = resp.lower()
-        
-        # Protect against DPI redirection (Fake Pass)
-        dpi_signatures = [b"peyvandha.ir", b"10.10.3", b"internet.ir", b"cra.ir"]
-        if any(blocked in resp_lower for blocked in dpi_signatures):
-            return False
-            
-        status_line = resp_lower.split(b'\r\n')[0]
-        if b"http/" in status_line:
-            # We strictly require a CF footprint. If it doesn't say Cloudflare, it's hijacked.
-            if b"cloudflare" in resp_lower or b"server: cloudflare" in resp_lower:
+    # Retries with exponential backoff for flakiness
+    for attempt in range(DEFAULT_RETRIES + 1):
+        try:
+            # 1. Quick TCP Check (Fail fast if completely blocked)
+            reader, writer = await asyncio.wait_for(asyncio.open_connection(ip, 443), timeout=DEFAULT_CONNECT_TIMEOUT)
+            writer.close()
+            await writer.wait_closed()
+
+            # 2. Deep TLS & HTTP Verification
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(ip, 443, ssl=ssl_ctx, server_hostname="speed.cloudflare.com"),
+                timeout=DEFAULT_CONNECT_TIMEOUT
+            )
+
+            probe = b"GET / HTTP/1.1\r\nHost: speed.cloudflare.com\r\nUser-Agent: Mozilla/5.0\r\nConnection: close\r\n\r\n"
+            writer.write(probe)
+            await writer.drain()
+
+            resp = await asyncio.wait_for(reader.read(4096), timeout=DEFAULT_READ_TIMEOUT)
+            writer.close()
+            await writer.wait_closed()
+
+            if not resp:
+                raise ValueError("empty response")
+
+            resp_lower = resp.lower()
+
+            # Protect against DPI redirection (Fake Pass)
+            dpi_signatures = [b"peyvandha.ir", b"10.10.3", b"internet.ir", b"cra.ir"]
+            if any(blocked in resp_lower for blocked in dpi_signatures):
+                return False
+
+            status_line = resp_lower.split(b'\r\n')[0]
+            if b"http/" in status_line:
+                # We prefer a Cloudflare footprint but accept any clean HTTP response
+                if b"cloudflare" in resp_lower or b"server: cloudflare" in resp_lower or b"via: 1.1 cloudflare" in resp_lower:
+                    return True
                 return True
-                
-    except Exception:
-        pass
-        
+
+        except Exception:
+            # backoff before retrying
+            if attempt < DEFAULT_RETRIES:
+                await asyncio.sleep(DEFAULT_BACKOFF * (attempt + 1))
+            continue
+
     return False
 
 async def race_ips(ip_list, max_concurrency=200):
@@ -257,6 +270,12 @@ async def run():
     ssl_ctx.check_hostname = False
     ssl_ctx.verify_mode = ssl.CERT_NONE
 
+    # Prepare CSV output
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    csv_name = f"sni_results_{stamp}.csv"
+    csv_path = paths.data_path("scan_outputs", csv_name)
+    storage.atomic_write_text(csv_path, "hostname,ipport,status,latency_ms,tls_version,http_status\n")
+
     semaphore = asyncio.Semaphore(concurrency)
     clean_snis = []
     completed = 0
@@ -265,34 +284,87 @@ async def run():
     async def check_sni(sni):
         nonlocal completed
         async with semaphore:
+            status_label = "UNKNOWN"
+            latency_ms = ""
+            tls_v = ""
+            http_status = ""
+            ipport = ""
+
+            # retry loop
+            for attempt in range(DEFAULT_RETRIES + 1):
+                start = time.monotonic()
+                try:
+                    reader, writer = await asyncio.wait_for(
+                        asyncio.open_connection(test_ip, 443, ssl=ssl_ctx, server_hostname=sni),
+                        timeout=DEFAULT_CONNECT_TIMEOUT
+                    )
+
+                    probe = f"GET / HTTP/1.1\r\nHost: {sni}\r\nUser-Agent: Mozilla/5.0\r\nConnection: close\r\n\r\n".encode()
+                    writer.write(probe)
+                    await writer.drain()
+
+                    resp = await asyncio.wait_for(reader.read(4096), timeout=DEFAULT_READ_TIMEOUT)
+                    end = time.monotonic()
+                    latency_ms = f"{(end - start) * 1000:.1f}"
+
+                    ssl_obj = writer.get_extra_info('ssl_object')
+                    if ssl_obj:
+                        try:
+                            tls_v = ssl_obj.version() or ""
+                        except Exception:
+                            tls_v = ""
+
+                    peer = writer.get_extra_info('peername')
+                    if peer:
+                        try:
+                            ipport = f"{peer[0]}:{peer[1]}"
+                        except Exception:
+                            ipport = ""
+
+                    writer.close()
+                    await writer.wait_closed()
+
+                    if resp:
+                        resp_lower = resp.lower()
+                        dpi_signatures = [b"peyvandha.ir", b"10.10.3", b"internet.ir", b"cra.ir"]
+                        if any(blocked in resp_lower for blocked in dpi_signatures):
+                            status_label = "FAIL"
+                        else:
+                            status_line = resp_lower.split(b'\r\n')[0]
+                            if b"http/" in status_line:
+                                # extract HTTP status code
+                                try:
+                                    parts = status_line.split()
+                                    http_status = parts[1].decode() if len(parts) >= 2 else ""
+                                except Exception:
+                                    http_status = ""
+                                status_label = "PASS"
+                            else:
+                                status_label = "UNKNOWN"
+                    else:
+                        status_label = "FAIL"
+
+                    # success or definitive result -> break retry loop
+                    break
+
+                except Exception:
+                    # backoff before next attempt
+                    if attempt < DEFAULT_RETRIES:
+                        await asyncio.sleep(DEFAULT_BACKOFF * (attempt + 1))
+                    continue
+
+            # record result to CSV
+            csv_line = f"{sni},{ipport},{status_label},{latency_ms},{tls_v},{http_status}"
             try:
-                reader, writer = await asyncio.wait_for(
-                    asyncio.open_connection(test_ip, 443, ssl=ssl_ctx, server_hostname=sni),
-                    timeout=3.0
-                )
-                
-                probe = f"GET / HTTP/1.1\r\nHost: {sni}\r\nUser-Agent: Mozilla/5.0\r\nConnection: close\r\n\r\n".encode()
-                writer.write(probe)
-                await writer.drain()
-                
-                resp = await asyncio.wait_for(reader.read(4096), timeout=3.0)
-                writer.close()
-                await writer.wait_closed()
-                
-                if resp:
-                    resp_lower = resp.lower()
-                    dpi_signatures = [b"peyvandha.ir", b"10.10.3", b"internet.ir", b"cra.ir"]
-                    
-                    if not any(blocked in resp_lower for blocked in dpi_signatures):
-                        status_line = resp_lower.split(b'\r\n')[0]
-                        if b"http/" in status_line:
-                            clean_snis.append(sni)
-                            sys.stdout.write('\r' + ' ' * 80 + '\r') 
-                            print(f"[+] CLEAN SNI FOUND: {sni}")
-                            
+                storage.append_line(csv_path, csv_line)
             except Exception:
                 pass
-            
+
+            if status_label == "PASS":
+                clean_snis.append(sni)
+                sys.stdout.write('\r' + ' ' * 80 + '\r')
+                print(f"[+] CLEAN SNI FOUND: {sni}  ({ipport}) {latency_ms}ms {tls_v} HTTP:{http_status}")
+
             completed += 1
             if completed % 10 == 0 or completed == total_tasks:
                 percent = (completed / total_tasks) * 100

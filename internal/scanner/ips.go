@@ -329,8 +329,8 @@ func NewScanner(cfg *ScannerConfig) *Scanner {
 		DisableCompression:  true,
 		DialContext:         s.dialer.DialContext,
 		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: true,
-			MinVersion:         tls.VersionTLS10,
+			InsecureSkipVerify: false,
+			MinVersion:         tls.VersionTLS12,
 			ClientSessionCache: s.tlsSessionCache,
 		},
 	}
@@ -516,8 +516,8 @@ func (s *Scanner) ScanIPsWithProgress(cidrs []string, opts IPScanOptions, progre
 		DisableCompression:  true,
 		DialContext:         s.dialer.DialContext,
 		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: true,
-			MinVersion:         tls.VersionTLS10,
+			InsecureSkipVerify: false,
+			MinVersion:         tls.VersionTLS12,
 			ClientSessionCache: s.tlsSessionCache,
 		},
 	}
@@ -1038,8 +1038,8 @@ func (s *Scanner) probeHTTPS(ctx context.Context, ip string, port int, opts IPSc
 
 			tlsConn := tls.Client(conn, &tls.Config{
 				ServerName:         domain,
-				InsecureSkipVerify: true,
-				MinVersion:         tls.VersionTLS10,
+				InsecureSkipVerify: false, // Match Python's strict TLS context to block bad actors
+				MinVersion:         tls.VersionTLS12,
 				ClientSessionCache: s.tlsSessionCache,
 			})
 			_ = tlsConn.SetDeadline(time.Now().Add(attemptTimeout))
@@ -1556,10 +1556,12 @@ func parseRawHTTPResponse(resp []byte) (int, http.Header, []byte) {
 	lines := bytes.SplitN(headBlock, []byte("\r\n"), -1)
 	if len(lines) > 0 {
 		// Parse status code from first line: "HTTP/1.1 200 OK"
-		statusLine := lines[0]
-		parts := bytes.SplitN(statusLine, []byte(" "), 3)
-		if len(parts) >= 2 {
-			fmt.Sscanf(string(parts[1]), "%d", &statusCode)
+		statusLine := bytes.ToLower(lines[0])
+		if bytes.HasPrefix(statusLine, []byte("http/")) {
+			parts := bytes.SplitN(statusLine, []byte(" "), 3)
+			if len(parts) >= 2 {
+				fmt.Sscanf(string(parts[1]), "%d", &statusCode)
+			}
 		}
 	}
 
