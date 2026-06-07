@@ -322,11 +322,13 @@ type tuiModel struct {
 	transferLogPath string
 	transferLogMu   *sync.Mutex
 	// incremental scan output file (written as results are discovered)
-	scanOutputPath    string
-	scanFailedPath    string
-	scanCSVPath       string
-	scanOutputWritten map[string]bool
-	scanOutputMu      *sync.Mutex
+	scanOutputPath        string
+	scanFailedPath        string
+	scanCSVPath           string
+	scanDomainPassPath    string
+	scanOutputWritten     map[string]bool
+	scanDomainPassWritten map[string]bool
+	scanOutputMu          *sync.Mutex
 	// pasteConfirm: used to avoid immediate submission when pasting multi-line targets
 	pasteConfirm   bool
 	pasteConfirmAt time.Time
@@ -424,6 +426,7 @@ func NewTUI(a *App) *tuiModel {
 
 	// prepare incremental output tracking
 	m.scanOutputWritten = make(map[string]bool)
+	m.scanDomainPassWritten = make(map[string]bool)
 	m.scanLogMu = &sync.Mutex{}
 	m.transferLogMu = &sync.Mutex{}
 	m.scanOutputMu = &sync.Mutex{}
@@ -660,6 +663,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case logMsg:
 		m.appendTransferLogLineFromScanLog(v.text)
+		m.appendDomainPassLineFromScanLog(v.text)
 		m.addLog(v.text)
 		// Re-arm wait for next message so UI keeps consuming from the channel
 		if m.scanMsgCh != nil {
@@ -3380,6 +3384,7 @@ func (m *tuiModel) startScanLogFile(scanKind string, targets []string, ports []i
 		// create initial file (overwrite if somehow exists)
 		_ = storage.AtomicWriteText(outPath, header)
 		m.scanOutputPath = outPath
+		m.scanDomainPassPath = ""
 
 		// if SNI scanner, also prepare failed and CSV incremental files
 		if scanKind == "sni_scanner" || scanKind == "desync_scanner" || m.operationType == "sni_scanner" || m.operationType == "desync_scanner" {
@@ -3396,10 +3401,20 @@ func (m *tuiModel) startScanLogFile(scanKind string, targets []string, ports []i
 			}
 			_ = storage.AtomicWriteText(csvPath, "hostname,ipport,status,latency_ms,tls_version,http_status\n")
 			m.scanCSVPath = csvPath
+		} else if scanKind == "ipscan" {
+			domainPassPath := filepath.Join(outDir, fmt.Sprintf("domain-passes-%s-%s.txt", scanKind, stamp))
+			if absDomainPass, err := filepath.Abs(domainPassPath); err == nil {
+				domainPassPath = absDomainPass
+			}
+			domainHeader := fmt.Sprintf("# Domain passes for passed endpoints\n# kind: %s\n# format: ip:port | domain1,domain2\n\n", scanKind)
+			_ = storage.AtomicWriteText(domainPassPath, domainHeader)
+			m.scanDomainPassPath = domainPassPath
+			m.writeScanLogLine(fmt.Sprintf("[OUTPUT] domain pass output: %s", domainPassPath))
 		}
 		// reset tracking
 		m.scanOutputMu.Lock()
 		m.scanOutputWritten = make(map[string]bool)
+		m.scanDomainPassWritten = make(map[string]bool)
 		m.scanOutputMu.Unlock()
 		m.writeScanLogLine(fmt.Sprintf("[OUTPUT] incremental output: %s", outPath))
 	}
@@ -3585,6 +3600,120 @@ func (m *tuiModel) appendTransferLogLineFromScanLog(line string) {
 	if err := storage.AppendLine(m.transferLogPath, line); err != nil {
 		m.writeScanLogLine(fmt.Sprintf("[TRANSFER] append failed: %v", err))
 	}
+}
+
+func (m *tuiModel) appendDomainPassLineFromScanLog(line string) {
+	if m == nil || m.scanDomainPassPath == "" {
+		return
+	}
+	ipPort, domains, passedCount, totalDomains, ok := parseDomainPassFromScannerLog(line)
+	if !ok || ipPort == "" || len(domains) == 0 {
+		return
+	}
+	if passedCount < 0 {
+		passedCount = 0
+	}
+	if totalDomains <= 0 {
+		totalDomains = 9
+	}
+	if passedCount == 0 {
+		passedCount = len(domains)
+	}
+
+	record := fmt.Sprintf("%s | %d/%d | %s", ipPort, passedCount, totalDomains, strings.Join(domains, ","))
+
+	m.scanOutputMu.Lock()
+	if m.scanDomainPassWritten == nil {
+		m.scanDomainPassWritten = make(map[string]bool)
+	}
+	if m.scanDomainPassWritten[record] {
+		m.scanOutputMu.Unlock()
+		return
+	}
+	m.scanDomainPassWritten[record] = true
+	m.scanOutputMu.Unlock()
+
+	if err := storage.AppendLine(m.scanDomainPassPath, record); err != nil {
+		m.writeScanLogLine(fmt.Sprintf("[OUTPUT] append domain pass failed: %v", err))
+	}
+}
+
+func parseDomainPassFromScannerLog(line string) (string, []string, int, int, bool) {
+	line = strings.TrimSpace(line)
+	if line == "" || !strings.Contains(line, "[ACCEPT]") {
+		return "", nil, 0, 0, false
+	}
+
+	idx := strings.Index(line, "[ACCEPT]")
+	if idx < 0 {
+		return "", nil, 0, 0, false
+	}
+	body := strings.TrimSpace(line[idx+len("[ACCEPT]"):])
+	if body == "" {
+		return "", nil, 0, 0, false
+	}
+
+	parts := strings.Fields(body)
+	if len(parts) == 0 {
+		return "", nil, 0, 0, false
+	}
+	ipPort := strings.TrimSpace(parts[0])
+	if ipPort == "" || !strings.Contains(ipPort, ":") {
+		return "", nil, 0, 0, false
+	}
+
+	passedCount := 0
+	totalDomains := 0
+	for _, token := range parts {
+		if strings.HasPrefix(token, "domains=") {
+			rawDomains := strings.TrimPrefix(token, "domains=")
+			var tested, total int
+			if _, err := fmt.Sscanf(rawDomains, "%d/%d", &tested, &total); err == nil {
+				totalDomains = total
+			}
+		}
+		if strings.HasPrefix(token, "domain_score=") {
+			rawScore := strings.TrimPrefix(token, "domain_score=")
+			var score int
+			if _, err := fmt.Sscanf(rawScore, "%d", &score); err == nil {
+				passedCount = score
+			}
+		}
+	}
+
+	passIdx := strings.Index(body, "passed=[")
+	if passIdx < 0 {
+		return "", nil, passedCount, totalDomains, false
+	}
+	raw := body[passIdx+len("passed=["):]
+	end := strings.Index(raw, "]")
+	if end < 0 {
+		return "", nil, passedCount, totalDomains, false
+	}
+	raw = strings.TrimSpace(raw[:end])
+	if raw == "" {
+		return "", nil, passedCount, totalDomains, false
+	}
+
+	seen := make(map[string]struct{})
+	domains := make([]string, 0, 8)
+	for _, d := range strings.Split(raw, ",") {
+		d = strings.TrimSpace(d)
+		if d == "" {
+			continue
+		}
+		if _, exists := seen[d]; exists {
+			continue
+		}
+		seen[d] = struct{}{}
+		domains = append(domains, d)
+	}
+	if len(domains) == 0 {
+		return "", nil, passedCount, totalDomains, false
+	}
+
+	sort.Strings(domains)
+	return ipPort, domains, passedCount, totalDomains, true
 }
 
 func parseProxyEndpointFromResult(line string) string {
