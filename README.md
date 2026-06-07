@@ -73,7 +73,7 @@ Generated artifacts (local run):
 - `builds/whitedns-macos-arm64`
 - `builds/whitedns-termux-arm64`
 
-The `builds/` directory also includes required data files copied during the build (e.g., `IranASNs/`, `assets/`).
+Each artifact is a standalone binary. ASN data and `cf-domains.txt` are embedded into the executable.
 
 ## Branch & recent changes
 
