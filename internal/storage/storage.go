@@ -109,15 +109,27 @@ func AtomicWriteText(filePath, content string) error {
 	if err != nil {
 		return err
 	}
-	defer tmpFile.Close()
+	tmpName := tmpFile.Name()
 
 	if _, err := tmpFile.WriteString(content); err != nil {
-		os.Remove(tmpFile.Name())
+		tmpFile.Close()
+		os.Remove(tmpName)
 		return err
 	}
 
 	tmpFile.Sync()
-	return os.Rename(tmpFile.Name(), filePath)
+	// Close before renaming: on Windows, os.Rename fails with "used by
+	// another process" if the source file still has an open handle.
+	if err := tmpFile.Close(); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+
+	if err := os.Rename(tmpName, filePath); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	return nil
 }
 
 // AtomicWriteJSON writes JSON to a file atomically

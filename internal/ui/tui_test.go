@@ -87,6 +87,41 @@ func TestAppendDomainPassLineFromScanLogWritesExpectedFormat(t *testing.T) {
 	}
 }
 
+func TestAppendDomainPassLineFromScanLogRecordsAcceptedEndpoint(t *testing.T) {
+	tmpDir := t.TempDir()
+	domainPassPath := filepath.Join(tmpDir, "whitedns logs", "domain-passes-ipscan-test.txt")
+	passedPath := filepath.Join(tmpDir, "whitedns logs", "passed-ipscan-test.txt")
+
+	m := &tuiModel{
+		operationType:         "scan_ips",
+		scanDomainPassPath:    domainPassPath,
+		scanOutputPath:        passedPath,
+		scanOutputMu:          &sync.Mutex{},
+		scanDomainPassWritten: make(map[string]bool),
+		scanOutputWritten:     make(map[string]bool),
+		scanLogMu:             &sync.Mutex{},
+	}
+
+	line := "[ACCEPT] 198.51.100.8:2053 status=accept domains=9/9 domain_score=2 passed=[workers.dev,reddit.com]"
+	m.appendDomainPassLineFromScanLog(line)
+	// duplicate accept for the same endpoint should not double-record
+	m.appendDomainPassLineFromScanLog(line)
+
+	if got, want := m.scanResults, []string{"198.51.100.8:2053"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected scanResults: got %v want %v", got, want)
+	}
+
+	content, err := os.ReadFile(passedPath)
+	if err != nil {
+		t.Fatalf("read passed-ipscan file: %v", err)
+	}
+	got := strings.TrimSpace(string(content))
+	want := "198.51.100.8:2053"
+	if got != want {
+		t.Fatalf("unexpected passed-ipscan output: got %q want %q", got, want)
+	}
+}
+
 func TestAppendNewScanResultsToFileWritesPlainIPPortForIPScan(t *testing.T) {
 	tmpDir := t.TempDir()
 	outputPath := filepath.Join(tmpDir, "whitedns logs", "passed-ipscan-test.txt")

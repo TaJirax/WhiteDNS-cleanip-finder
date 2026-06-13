@@ -610,7 +610,10 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c":
 			return m, tea.Quit
 		case "esc":
-			if m.screen != screenMenu {
+			// Config maker manages its own step-by-step back navigation on
+			// Esc (so Esc steps back one screen instead of exiting the
+			// whole flow); let it through to the screen handler below.
+			if m.screen != screenMenu && m.screen != screenConfigMaker {
 				m.goBack()
 				m.ti.Blur()
 				return m, nil
@@ -643,7 +646,13 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.scanResults = append(m.scanResults, v.currentIP)
 					}
 				}
-			} else if v.hits > prevHits {
+			} else if m.operationType != "scan_ips" && v.hits > prevHits {
+				// For scan_ips, currentIP is whichever endpoint a worker happened to
+				// finish when this throttled progress tick fired, not necessarily the
+				// one that just got accepted (probes run concurrently). Recording it
+				// here would pollute scanResults with non-accepted endpoints; the
+				// real accepted IP is captured from [ACCEPT] log lines instead via
+				// appendDomainPassLineFromScanLog.
 				if len(m.scanResults) == 0 || m.scanResults[len(m.scanResults)-1] != v.currentIP {
 					m.scanResults = append(m.scanResults, v.currentIP)
 				}
@@ -3634,15 +3643,37 @@ func (m *tuiModel) appendDomainPassLineFromScanLog(line string) {
 	if m.scanDomainPassWritten == nil {
 		m.scanDomainPassWritten = make(map[string]bool)
 	}
-	if m.scanDomainPassWritten[record] {
-		m.scanOutputMu.Unlock()
-		return
+	alreadyRecorded := m.scanDomainPassWritten[record]
+	if !alreadyRecorded {
+		m.scanDomainPassWritten[record] = true
 	}
-	m.scanDomainPassWritten[record] = true
+	if m.scanOutputWritten == nil {
+		m.scanOutputWritten = make(map[string]bool)
+	}
+	newAccept := !m.scanOutputWritten[ipPort]
+	if newAccept {
+		m.scanOutputWritten[ipPort] = true
+	}
 	m.scanOutputMu.Unlock()
 
-	if err := storage.AppendLine(m.scanDomainPassPath, record); err != nil {
-		m.writeScanLogLine(fmt.Sprintf("[OUTPUT] append domain pass failed: %v", err))
+	if !alreadyRecorded {
+		if err := storage.AppendLine(m.scanDomainPassPath, record); err != nil {
+			m.writeScanLogLine(fmt.Sprintf("[OUTPUT] append domain pass failed: %v", err))
+		}
+	}
+
+	// [ACCEPT] log lines are the authoritative signal that this endpoint
+	// passed - record it for the live results view and the passed-ipscan
+	// output file right away (mirrors the SNI/desync incremental write).
+	if newAccept {
+		if len(m.scanResults) == 0 || m.scanResults[len(m.scanResults)-1] != ipPort {
+			m.scanResults = append(m.scanResults, ipPort)
+		}
+		if m.scanOutputPath != "" {
+			if err := storage.AppendLine(m.scanOutputPath, ipPort); err != nil {
+				m.writeScanLogLine(fmt.Sprintf("[OUTPUT] append failed: %v", err))
+			}
+		}
 	}
 }
 
