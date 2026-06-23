@@ -156,6 +156,7 @@ const (
 	screenForceReroute      = "force_reroute"
 	screenSetProxyPort      = "set_proxy_port"
 	screenScanResults       = "scan_results"
+	screenSNISource         = "sni_source"
 )
 
 const maxAllowedConcurrency = 10000
@@ -185,6 +186,13 @@ type scanConfig struct {
 	FilterType                string
 	Concurrency               int
 	AdaptiveDomainConcurrency int
+	// LowBandwidth widens verification timeouts for users on slow / high-latency
+	// links (e.g. 8 Mbps down, 1 Mbps up) so good endpoints are not falsely
+	// timed out by the default short windows.
+	LowBandwidth bool
+	// SNIDomains overrides the SNI hostnames probed by the SNI scanner. When
+	// empty the scanner falls back to the built-in + managed default list.
+	SNIDomains []string
 }
 
 type menuItem struct {
@@ -415,7 +423,7 @@ func NewTUI(a *App) *tuiModel {
 		},
 		methodOptions:      []string{"Direct (fast, in-process)", "Masscan preflight", "Nmap preflight"},
 		transferOptions:    []string{"Old transfer model (stable)", "goBrrrr transfer mode (fast)"},
-		concurrencyOptions: []string{"Low (50)", "Medium (250)", "High (500)", "Very High (1000)", "Max (2000)", "Extreme (5000)"},
+		concurrencyOptions: []string{"Low Bandwidth (50, long timeout)", "Low (50)", "Medium (250)", "High (500)", "Very High (1000)", "Max (2000)", "Extreme (5000)"},
 		selectedItems:      make(map[int]bool),
 		scanKind:           "http",
 		typingEnabled:      true,
@@ -695,6 +703,8 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m, screenCmd = m.handleMenuScreen(msg)
 	case screenScanMode:
 		m, screenCmd = m.handleScanModeScreen(msg)
+	case screenSNISource:
+		m, screenCmd = m.handleSNISourceScreen(msg)
 	case screenSelectASN:
 		m, screenCmd = m.handleSelectASNScreen(msg)
 	case screenTypeTargets:
@@ -760,6 +770,8 @@ func (m tuiModel) View() string {
 		body = m.viewMenu(w, h)
 	case screenScanMode:
 		body = m.viewScanMode(w, h)
+	case screenSNISource:
+		body = m.viewSNISource(w, h)
 	case screenSelectASN:
 		body = m.viewSelectASN(w, h)
 	case screenTypeTargets:
@@ -961,6 +973,24 @@ func (m tuiModel) viewScanMode(w, h int) string {
 		items,
 		"↑↓ navigate  ·  Enter select  ·  Esc back",
 	)
+}
+
+func (m tuiModel) viewSNISource(w, h int) string {
+	if m.tiStep == 1 {
+		inner := w - 6
+		panel := panelStyle(cBorderActive).Width(inner).Render(
+			sHeader.Render(" ENTER SNI DOMAIN(S) ") + "\n\n" +
+				sInfo.Render("Type one or more domains (space, comma, or newline separated).\n\n") +
+				"  " + m.ti.View(),
+		)
+		return panel + "\n\n" + sDim.Render("Enter to continue  ·  Esc back")
+	}
+	def := tlsprobe.GetDomains(m.app.DataDir)
+	items := []string{
+		fmt.Sprintf("Use default SNI list (%d domains)", len(def)),
+		"Enter your own domain(s)",
+	}
+	return m.viewList(w, h, "SNI SOURCE", items, "↑↓ navigate  ·  Enter select  ·  Esc back")
 }
 
 func (m tuiModel) viewSelectASN(w, h int) string {
@@ -1896,6 +1926,10 @@ func (m tuiModel) activateMenuItem() (tuiModel, tea.Cmd) {
 	case "sni_scanner":
 		m.addLog("SNI Scanner (TLS Hostname Probe) selected")
 		m.gotoScanMode("sni_scanner", "sni_scanner")
+		// Ask which SNI hostnames to probe before choosing IP targets.
+		m.screen = screenSNISource
+		m.cursor = 0
+		m.tiStep = 0
 	case "config_maker":
 		m.pushScreen(screenConfigMaker)
 		m.initConfigMaker()
@@ -1961,6 +1995,78 @@ func (m tuiModel) handleScanModeScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+// handleSNISourceScreen lets the user choose the SNI hostnames probed by the
+// SNI scanner: the managed default list, or their own domains entered inline.
+func (m tuiModel) handleSNISourceScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
+	if m.tiStep == 1 {
+		if k, ok := msg.(tea.KeyMsg); ok && k.String() == "enter" {
+			domains := parseSNIDomains(m.ti.Value())
+			if len(domains) == 0 {
+				m.setToast(sError.Render("x Enter at least one valid domain"), 3*time.Second)
+				return m, nil
+			}
+			m.scanConfig.SNIDomains = domains
+			m.addLog(fmt.Sprintf("Using %d custom SNI domain(s)", len(domains)))
+			m.ti.Blur()
+			m.tiStep = 0
+			m.screen = screenScanMode
+			m.cursor = 0
+			return m, nil
+		}
+		m.ti, _ = m.ti.Update(msg)
+		return m, nil
+	}
+
+	k, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return m, nil
+	}
+	switch k.String() {
+	case "up", "k":
+		if m.cursor > 0 {
+			m.cursor--
+		}
+	case "down", "j":
+		if m.cursor < 1 {
+			m.cursor++
+		}
+	case "enter":
+		if m.cursor == 1 {
+			m.tiStep = 1
+			m.setupInput("Domains e.g. example.com, cdn.example.net")
+			return m, nil
+		}
+		m.scanConfig.SNIDomains = nil
+		m.addLog("Using default SNI probe domains")
+		m.screen = screenScanMode
+		m.cursor = 0
+	}
+	return m, nil
+}
+
+// parseSNIDomains splits a raw user string into normalized, deduped domains.
+func parseSNIDomains(raw string) []string {
+	seen := make(map[string]struct{})
+	var out []string
+	for _, field := range strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ' ' || r == '\t' || r == '\n' || r == '\r' || r == ';'
+	}) {
+		d := strings.ToLower(strings.TrimSpace(field))
+		d = strings.TrimPrefix(d, "https://")
+		d = strings.TrimPrefix(d, "http://")
+		d = strings.TrimSuffix(d, "/")
+		if d == "" || !strings.Contains(d, ".") {
+			continue
+		}
+		if _, ok := seen[d]; ok {
+			continue
+		}
+		seen[d] = struct{}{}
+		out = append(out, d)
+	}
+	return out
 }
 
 func (m tuiModel) handleSelectASNScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
@@ -2304,7 +2410,9 @@ func (m tuiModel) handleSelectConcurrencyScreen(msg tea.Msg) (tuiModel, tea.Cmd)
 	if !ok {
 		return m, nil
 	}
-	vals := []int{50, 250, 500, 1000, 2000, 5000}
+	// Index 0 is the low-bandwidth profile (50 workers, long timeouts); the
+	// remaining entries mirror the standard concurrency presets.
+	vals := []int{50, 50, 250, 500, 1000, 2000, 5000}
 	switch k.String() {
 	case "up", "k":
 		if m.cursor > 0 {
@@ -2320,8 +2428,13 @@ func (m tuiModel) handleSelectConcurrencyScreen(msg tea.Msg) (tuiModel, tea.Cmd)
 			m.addLog(fmt.Sprintf("Requested concurrency %d exceeds max %d - capping to %d", sel, maxAllowedConcurrency, maxAllowedConcurrency))
 			sel = maxAllowedConcurrency
 		}
+		m.scanConfig.LowBandwidth = m.cursor == 0
 		m.scanConfig.Concurrency = sel
-		m.addLog(fmt.Sprintf("Concurrency set to %d", m.scanConfig.Concurrency))
+		if m.scanConfig.LowBandwidth {
+			m.addLog(fmt.Sprintf("Low-bandwidth mode: concurrency=%d with extended verification timeouts", sel))
+		} else {
+			m.addLog(fmt.Sprintf("Concurrency set to %d", m.scanConfig.Concurrency))
+		}
 		m.startOperation()
 
 		targets := m.scanConfig.ASNs
@@ -2335,7 +2448,7 @@ func (m tuiModel) handleSelectConcurrencyScreen(msg tea.Msg) (tuiModel, tea.Cmd)
 
 		if m.operationType == "scan_ips" {
 			endpointCount := len(targets) * len(ports)
-			timeout := scanTimeoutBudget(endpointCount)
+			timeout := scanTimeoutBudget(endpointCount, m.scanConfig.LowBandwidth)
 			m.startScanLogFile("ipscan", targets, ports, m.scanConfig.Concurrency, timeout)
 			m.app.Scanner.SetTargetPorts(ports)
 			m.scanMsgCh = make(chan tea.Msg, 65536)
@@ -2345,7 +2458,7 @@ func (m tuiModel) handleSelectConcurrencyScreen(msg tea.Msg) (tuiModel, tea.Cmd)
 		}
 		if m.operationType == "sni_scanner" {
 			endpointCount := len(targets) * len(ports)
-			timeout := scanTimeoutBudget(endpointCount)
+			timeout := scanTimeoutBudget(endpointCount, m.scanConfig.LowBandwidth)
 			m.startScanLogFile("sni_scanner", targets, ports, m.scanConfig.Concurrency, timeout)
 			m.app.Scanner.SetTargetPorts(ports)
 			m.scanMsgCh = make(chan tea.Msg, 65536)
@@ -2355,7 +2468,7 @@ func (m tuiModel) handleSelectConcurrencyScreen(msg tea.Msg) (tuiModel, tea.Cmd)
 		}
 		if m.operationType == "desync_scanner" {
 			endpointCount := len(targets) * len(ports)
-			timeout := scanTimeoutBudget(endpointCount)
+			timeout := scanTimeoutBudget(endpointCount, m.scanConfig.LowBandwidth)
 			m.startScanLogFile("desync_scanner", targets, ports, m.scanConfig.Concurrency, timeout)
 			m.app.Scanner.SetTargetPorts(ports)
 			m.scanMsgCh = make(chan tea.Msg, 65536)
@@ -2363,10 +2476,7 @@ func (m tuiModel) handleSelectConcurrencyScreen(msg tea.Msg) (tuiModel, tea.Cmd)
 			m.addLog(fmt.Sprintf("Scan log file: %s", m.scanLogPath))
 			return m, m.cmdPoolOperation("desync_scanner", targets)
 		}
-		timeout := time.Duration(6+m.scanConfig.Concurrency/500) * time.Second
-		if timeout > 30*time.Second {
-			timeout = 30 * time.Second
-		}
+		timeout := proxyScanTimeout(m.scanConfig.Concurrency, m.scanConfig.LowBandwidth)
 		m.startScanLogFile(m.scanKind, targets, ports, m.scanConfig.Concurrency, timeout)
 		m.app.Scanner.SetTargetPorts(ports)
 		m.scanMsgCh = make(chan tea.Msg, 65536)
@@ -2843,10 +2953,7 @@ func (m tuiModel) cmdScanWithConfig(targets []string, cfg scanConfig, scanKind s
 		if conc <= 0 {
 			conc = 500
 		}
-		timeout := time.Duration(6+conc/500) * time.Second
-		if timeout > 30*time.Second {
-			timeout = 30 * time.Second
-		}
+		timeout := proxyScanTimeout(conc, cfg.LowBandwidth)
 		opts := scanner.ProxyScanOptions{
 			Ports:         ports,
 			Discovery:     disc,
@@ -2936,7 +3043,7 @@ func (m tuiModel) cmdPoolOperation(opType string, asnNetworks []string) tea.Cmd 
 				if conc <= 0 {
 					conc = 250
 				}
-				timeout := scanTimeoutBudget(endpointCount)
+				timeout := scanTimeoutBudget(endpointCount, cfg.LowBandwidth)
 				opts := scanner.IPScanOptions{
 					Ports:         ports,
 					Concurrency:   conc,
@@ -2945,7 +3052,12 @@ func (m tuiModel) cmdPoolOperation(opType string, asnNetworks []string) tea.Cmd 
 				}
 				if opType == "sni_scanner" || opType == "desync_scanner" {
 					// SNI scanner uses tlsprobe hostnames for the TLS hostname probe path.
-					domains := tlsprobe.GetDomains(m.app.DataDir)
+					// Prefer user-supplied domains from the inline SNI-source prompt,
+					// falling back to the managed default list.
+					domains := cfg.SNIDomains
+					if len(domains) == 0 {
+						domains = tlsprobe.GetDomains(m.app.DataDir)
+					}
 					opts.ProbeDomainsHTTPS = append([]string(nil), domains...)
 					opts.ProbeDomainsHTTP = append([]string(nil), domains...)
 				}
@@ -2983,6 +3095,19 @@ func (m tuiModel) cmdPoolOperation(opType string, asnNetworks []string) tea.Cmd 
 				if opType == "sni_scanner" || opType == "desync_scanner" {
 					// SNI scanner uses tlsprobe runner with TLS probe domains.
 					resCh := make(chan tlsprobe.ProbeResult, 1024)
+					if len(targets) == 0 || len(opts.ProbeDomainsHTTPS) == 0 {
+						// Nothing to probe: surface the reason instead of appearing to hang.
+						reason := "no IP targets selected"
+						if len(opts.ProbeDomainsHTTPS) == 0 {
+							reason = "no SNI domains selected"
+						}
+						select {
+						case ch <- logMsg{text: "[!] SNI scan aborted: " + reason}:
+						default:
+						}
+						close(ch)
+						return poolOperationCompleteMsg{operationType: opType, results: []string{"SNI scan aborted: " + reason}, duration: time.Since(t0)}
+					}
 					go func() {
 						cfg := tlsprobe.ScanConfig{
 							Targets:     append([]string(nil), targets...),
@@ -3140,10 +3265,7 @@ func (m tuiModel) cmdProxyScan(targets []string, cfg scanConfig, scanKind string
 			if conc <= 0 {
 				conc = 500
 			}
-			timeout := time.Duration(6+conc/500) * time.Second
-			if timeout > 30*time.Second {
-				timeout = 30 * time.Second
-			}
+			timeout := proxyScanTimeout(conc, cfg.LowBandwidth)
 			opts := scanner.ProxyScanOptions{
 				Ports:         ports,
 				Discovery:     disc,
@@ -3775,19 +3897,43 @@ func parseProxyEndpointFromResult(line string) string {
 	return ""
 }
 
-func scanTimeoutBudget(endpointCount int) time.Duration {
+func scanTimeoutBudget(endpointCount int, lowBandwidth bool) time.Duration {
+	var budget time.Duration
 	switch {
 	case endpointCount >= 1000000:
-		return 1500 * time.Millisecond
+		budget = 1500 * time.Millisecond
 	case endpointCount >= 100000:
-		return 2 * time.Second
+		budget = 2 * time.Second
 	case endpointCount >= 10000:
-		return 2500 * time.Millisecond
+		budget = 2500 * time.Millisecond
 	case endpointCount >= 1000:
-		return 3 * time.Second
+		budget = 3 * time.Second
 	default:
-		return 4 * time.Second
+		budget = 4 * time.Second
 	}
+	if lowBandwidth {
+		// High-latency links need a far more forgiving per-endpoint budget so
+		// slow-but-usable hosts are not dropped. Floor it at 12s.
+		budget *= 4
+		if budget < 12*time.Second {
+			budget = 12 * time.Second
+		}
+	}
+	return budget
+}
+
+// proxyScanTimeout returns the per-endpoint verification timeout for proxy
+// scans. Low-bandwidth mode uses a generous fixed budget; the wave verifier
+// scales its sub-timeouts from this value (see waveTimeouts in proxy_scan.go).
+func proxyScanTimeout(conc int, lowBandwidth bool) time.Duration {
+	if lowBandwidth {
+		return 25 * time.Second
+	}
+	timeout := time.Duration(6+conc/500) * time.Second
+	if timeout > 30*time.Second {
+		timeout = 30 * time.Second
+	}
+	return timeout
 }
 
 func (m *tuiModel) setToast(text string, dur time.Duration) {

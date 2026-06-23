@@ -34,6 +34,29 @@ const (
 	httpWave3Concurrency = 200
 )
 
+// waveTimeouts derives per-wave verification deadlines from a base timeout so
+// that low-bandwidth / high-latency users (who configure a larger timeout) are
+// not rejected by the short hard-coded windows. With the default 8s base this
+// reproduces the historical 2s/4s/8s waves exactly.
+func waveTimeouts(base time.Duration) (w1, w2, w3 time.Duration) {
+	if base <= 0 {
+		base = defaultHTTPScanTimeout
+	}
+	w3 = base
+	w2 = base / 2
+	w1 = base / 4
+	if w1 < httpWave1Timeout {
+		w1 = httpWave1Timeout
+	}
+	if w2 < w1 {
+		w2 = w1
+	}
+	if w3 < w2 {
+		w3 = w2
+	}
+	return
+}
+
 var (
 	httpStatusPrefix11 = []byte("HTTP/1.1 200")
 	httpStatusPrefix10 = []byte("HTTP/1.0 200")
@@ -294,7 +317,7 @@ func (s *Scanner) scanProxyCandidates(candidates []string, concurrency int, time
 func (s *Scanner) scanProxyCandidatesWave3(candidates []string, maxTimeout time.Duration, transferModel string) []ProxyScanResult {
 	total := len(candidates)
 	s.logf("[TRACE] Pipelined Wave3 starting: total=%d candidates (w1=%d w2=%d w3=%d)\n", total, httpWave1Concurrency, httpWave2Concurrency, httpWave3Concurrency)
-	_ = maxTimeout
+	w1Timeout, w2Timeout, w3Timeout := waveTimeouts(maxTimeout)
 
 	if total == 0 {
 		return []ProxyScanResult{}
@@ -370,7 +393,7 @@ func (s *Scanner) scanProxyCandidatesWave3(candidates []string, maxTimeout time.
 
 			// Wave 1
 			sem1 <- struct{}{}
-			ok := httpWave1(ep)
+			ok := httpWave1(ep, w1Timeout)
 			<-sem1
 			done := atomic.AddInt64(&w1Done, 1)
 			if ok {
@@ -382,7 +405,7 @@ func (s *Scanner) scanProxyCandidatesWave3(candidates []string, maxTimeout time.
 
 			// Wave 2
 			sem2 <- struct{}{}
-			ok = httpWave2(ep)
+			ok = httpWave2(ep, w2Timeout)
 			<-sem2
 			atomic.AddInt64(&w2Done, 1)
 			if ok {
@@ -394,7 +417,7 @@ func (s *Scanner) scanProxyCandidatesWave3(candidates []string, maxTimeout time.
 
 			// Wave 3 (strict acceptance)
 			sem3 <- struct{}{}
-			ok = httpWave3(ep)
+			ok = httpWave3(ep, w3Timeout)
 			<-sem3
 			atomic.AddInt64(&w3Done, 1)
 			if ok {
@@ -440,7 +463,7 @@ func (s *Scanner) runProxyWaveOptimized(candidates []string, concurrency int, ti
 	if total == 0 {
 		return []ProxyScanResult{}
 	}
-	_ = timeout
+	w1Timeout, w2Timeout, w3Timeout := waveTimeouts(timeout)
 
 	if concurrency > total {
 		concurrency = total
@@ -469,11 +492,11 @@ func (s *Scanner) runProxyWaveOptimized(candidates []string, concurrency int, ti
 
 				// Route to appropriate verification function
 				if isFastPing {
-					passed = httpWave1(endpoint)
+					passed = httpWave1(endpoint, w1Timeout)
 				} else if waveName == "wave2" {
-					passed = httpWave2(endpoint)
+					passed = httpWave2(endpoint, w2Timeout)
 				} else {
-					passed = httpWave3(endpoint)
+					passed = httpWave3(endpoint, w3Timeout)
 				}
 
 				if passed {
@@ -714,31 +737,31 @@ func probeSOCKS5ProxyHost(endpoint, host string, timeout time.Duration) bool {
 }
 
 func (httpVerifier) verify(endpoint string, timeout time.Duration) bool {
-	_ = timeout
-	if !httpWave1(endpoint) {
+	w1, w2, w3 := waveTimeouts(timeout)
+	if !httpWave1(endpoint, w1) {
 		return false
 	}
-	if !httpWave2(endpoint) {
+	if !httpWave2(endpoint, w2) {
 		return false
 	}
-	return httpWave3(endpoint)
+	return httpWave3(endpoint, w3)
 }
 
-func httpWave1(endpoint string) bool {
-	conn, err := net.DialTimeout("tcp", endpoint, httpWave1Timeout)
+func httpWave1(endpoint string, timeout time.Duration) bool {
+	conn, err := net.DialTimeout("tcp", endpoint, timeout)
 	if err != nil {
 		return false
 	}
 	if tcp, ok := conn.(*net.TCPConn); ok {
 		_ = tcp.SetNoDelay(true)
 	}
-	_ = conn.SetDeadline(time.Now().Add(httpWave1Timeout))
+	_ = conn.SetDeadline(time.Now().Add(timeout))
 	_ = conn.Close()
 	return true
 }
 
-func httpWave2(endpoint string) bool {
-	conn, err := net.DialTimeout("tcp", endpoint, httpWave2Timeout)
+func httpWave2(endpoint string, timeout time.Duration) bool {
+	conn, err := net.DialTimeout("tcp", endpoint, timeout)
 	if err != nil {
 		return false
 	}
@@ -746,7 +769,7 @@ func httpWave2(endpoint string) bool {
 	if tcp, ok := conn.(*net.TCPConn); ok {
 		_ = tcp.SetNoDelay(true)
 	}
-	_ = conn.SetDeadline(time.Now().Add(httpWave2Timeout))
+	_ = conn.SetDeadline(time.Now().Add(timeout))
 
 	const proxyRequest = "GET http://example.com/ HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n"
 	if _, err := io.WriteString(conn, proxyRequest); err != nil {
@@ -762,8 +785,8 @@ func httpWave2(endpoint string) bool {
 	return bytesHasHTTP200Prefix(head)
 }
 
-func httpWave3(endpoint string) bool {
-	conn, err := net.DialTimeout("tcp", endpoint, httpWave3Timeout)
+func httpWave3(endpoint string, timeout time.Duration) bool {
+	conn, err := net.DialTimeout("tcp", endpoint, timeout)
 	if err != nil {
 		return false
 	}
@@ -771,7 +794,7 @@ func httpWave3(endpoint string) bool {
 	if tcp, ok := conn.(*net.TCPConn); ok {
 		_ = tcp.SetNoDelay(true)
 	}
-	_ = conn.SetDeadline(time.Now().Add(httpWave3Timeout))
+	_ = conn.SetDeadline(time.Now().Add(timeout))
 
 	const fingerprintRequest = "GET http://example.com/ HTTP/1.1\r\nHost: example.com\r\nUser-Agent: Mozilla/5.0\r\nAccept: text/html\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n"
 	if _, err := io.WriteString(conn, fingerprintRequest); err != nil {
@@ -780,7 +803,7 @@ func httpWave3(endpoint string) bool {
 
 	buf := make([]byte, 0, httpWave3Limit)
 	tmp := make([]byte, 1024)
-	deadline := time.Now().Add(httpWave3Timeout)
+	deadline := time.Now().Add(timeout)
 	for len(buf) < cap(buf) {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
