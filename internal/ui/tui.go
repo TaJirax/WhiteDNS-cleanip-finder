@@ -850,8 +850,8 @@ func (m tuiModel) viewMenu(w, h int) string {
 	half := (len(m.menu) + 1) / 2
 
 	// Title bar
-	titleBar := renderGradientText("WHITEDNS v1", []string{"#ff0000", "#ff0000"}, true) + "  " +
-		renderGradientText("developed by ashentajir", []string{"#00d1ff", "#8a2be2", "#ff0000"}, false) + "  " +
+	titleBar := renderGradientText("WHITEDNS v1.1", []string{"#ff0000", "#ff0000"}, true) + "  " +
+		renderGradientText("developed by TAjirax", []string{"#00d1ff", "#8a2be2", "#ff0000"}, false) + "  " +
 		sDim.Render(fmt.Sprintf("port:%d  logs:%d  %s", m.app.Cfg.ProxyPort, len(m.logs), time.Now().Format("15:04:05")))
 	accentBar := lipgloss.NewStyle().Foreground(cAccent).Render(strings.Repeat("-", inner-1))
 
