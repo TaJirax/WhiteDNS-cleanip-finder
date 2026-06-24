@@ -335,11 +335,10 @@ func NewScanner(cfg *ScannerConfig) *Scanner {
 		DisableKeepAlives:   false,
 		DisableCompression:  true,
 		DialContext:         s.dialer.DialContext,
-		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: false,
+		TLSClientConfig: applyScanTLSRoots(&tls.Config{
 			MinVersion:         tls.VersionTLS12,
 			ClientSessionCache: s.tlsSessionCache,
-		},
+		}),
 	}
 	s.httpClient = &http.Client{Transport: transport, Timeout: globalHTTPClientTimeout}
 
@@ -419,11 +418,8 @@ func (s *Scanner) ScanIPsWithCIDR(cidrs []string, opts IPScanOptions) ([]string,
 	}
 	opts.ProbeDomainsHTTP = normalizeProbeDomains(opts.ProbeDomainsHTTP)
 	opts.ProbeDomainsHTTPS = normalizeProbeDomains(opts.ProbeDomainsHTTPS)
-	s.ensureTransportHealthy(context.Background(), "ip-scan", nil, opts.Timeout, 1)
-	stopHealthMonitor := s.startTransportHealthMonitor(context.Background(), "ip-scan", nil, opts.Timeout, 1)
-	defer stopHealthMonitor()
 
-	s.logf("[DEBUG] ScanIPsWithProgress called with %d CIDRs: %v\n", len(cidrs), cidrs)
+	s.logf("[DEBUG] ScanIPsWithCIDR called with %d CIDRs: %v\n", len(cidrs), cidrs)
 
 	var allIPs []string
 	ipSet := make(map[string]bool)
@@ -461,6 +457,17 @@ func (s *Scanner) ScanIPsWithCIDR(cidrs []string, opts IPScanOptions) ([]string,
 		s.logf("[ERROR] ScanIPsWithCIDR: no IPs expanded from CIDRs\n")
 		return nil, fmt.Errorf("no IPs expanded from CIDRs")
 	}
+
+	// Connectivity gate runs only after the (purely local) IP expansion above so
+	// it can never prevent unique IPs from loading. It precedes the probing.
+	healthSummary := s.ensureTransportHealthy(context.Background(), "ip-scan", nil, opts.Timeout, 1)
+	stopHealthMonitor := func() {}
+	if healthSummary.Reachable >= 1 {
+		stopHealthMonitor = s.startTransportHealthMonitor(context.Background(), "ip-scan", nil, opts.Timeout, 1)
+	} else {
+		s.logf("[HEALTH] ip-scan health sites unreachable at startup; running without the pause-monitor\n")
+	}
+	defer stopHealthMonitor()
 
 	// Build endpoints: fixed ip:port pairs first, then CIDR-expanded IPs × all ports
 	endpoints := make([]simpleEndpoint, 0, len(fixedEndpoints)+len(allIPs)*len(opts.Ports))
@@ -501,9 +508,6 @@ func (s *Scanner) ScanIPsWithProgress(cidrs []string, opts IPScanOptions, progre
 	}
 	opts.ProbeDomainsHTTP = normalizeProbeDomains(opts.ProbeDomainsHTTP)
 	opts.ProbeDomainsHTTPS = normalizeProbeDomains(opts.ProbeDomainsHTTPS)
-	s.ensureTransportHealthy(context.Background(), "ip-scan", nil, opts.Timeout, 1)
-	stopHealthMonitor := s.startTransportHealthMonitor(context.Background(), "ip-scan", nil, opts.Timeout, 1)
-	defer stopHealthMonitor()
 
 	s.logf("[TRACE] ScanIPsWithProgress: config set - concurrency=%d timeout=%s ports=%v\n", opts.Concurrency, opts.Timeout.String(), opts.Ports)
 
@@ -545,6 +549,22 @@ func (s *Scanner) ScanIPsWithProgress(cidrs []string, opts IPScanOptions, progre
 
 	s.logf("[TRACE] ScanIPsWithProgress: total unique IPs after expansion: %d, fixed endpoints: %d\n", len(allIPs), len(fixedEndpoints))
 
+	// Connectivity gate runs only after the (purely local) IP expansion above so
+	// it can never prevent unique IPs from loading. It precedes the actual
+	// network probing below.
+	healthSummary := s.ensureTransportHealthy(context.Background(), "ip-scan", nil, opts.Timeout, 1)
+	// Only run the background pause-monitor if the device could actually reach a
+	// health site at startup. If it could not (e.g. Termux on a non-Iran
+	// network), the monitor would only generate false "outage" pauses and stall
+	// the scan, so we skip it and let the scan run unguarded.
+	stopHealthMonitor := func() {}
+	if healthSummary.Reachable >= 1 {
+		stopHealthMonitor = s.startTransportHealthMonitor(context.Background(), "ip-scan", nil, opts.Timeout, 1)
+	} else {
+		s.logf("[HEALTH] ip-scan health sites unreachable at startup; running without the pause-monitor\n")
+	}
+	defer stopHealthMonitor()
+
 	// Build endpoints: fixed ip:port pairs first, then CIDR-expanded IPs × all ports
 	endpoints := make([]simpleEndpoint, 0, len(fixedEndpoints)+len(allIPs)*len(opts.Ports))
 	endpoints = append(endpoints, fixedEndpoints...)
@@ -573,6 +593,14 @@ func (s *Scanner) ScanIPsWithProgress(cidrs []string, opts IPScanOptions, progre
 		// no explicit concurrency provided — adopt 2000 for large scans
 		opts.Concurrency = 2000
 	}
+	// Clamp concurrency to what the OS file-descriptor limit can sustain.
+	// Without this, Termux/Android (default RLIMIT_NOFILE ~1024) exhausts its fd
+	// table at 2000 concurrent dials and every probe fails, yielding zero
+	// results even though the scan succeeds on Windows.
+	if fdCap := maxSafeConcurrency(); fdCap > 0 && opts.Concurrency > fdCap {
+		s.logf("[DEBUG] ScanIPsWithProgress: capping concurrency %d -> %d (fd limit)\n", opts.Concurrency, fdCap)
+		opts.Concurrency = fdCap
+	}
 	// adjust scanner-local http client timeout and transport to use optimal timeout
 	transport := &http.Transport{
 		MaxIdleConns:        1024,
@@ -581,11 +609,10 @@ func (s *Scanner) ScanIPsWithProgress(cidrs []string, opts IPScanOptions, progre
 		DisableKeepAlives:   false,
 		DisableCompression:  true,
 		DialContext:         s.dialer.DialContext,
-		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: false,
+		TLSClientConfig: applyScanTLSRoots(&tls.Config{
 			MinVersion:         tls.VersionTLS12,
 			ClientSessionCache: s.tlsSessionCache,
-		},
+		}),
 	}
 	s.httpClient = &http.Client{Transport: transport, Timeout: optimalTimeout}
 	s.logf("[DEBUG] ScanIPsWithProgress: adjusted client timeout to %s for %d endpoints\n", optimalTimeout.String(), endpointCount)
@@ -1138,12 +1165,11 @@ func (s *Scanner) probeHTTPS(ctx context.Context, ip string, port int, opts IPSc
 				tcpConn.SetNoDelay(true)
 			}
 
-			tlsConn := tls.Client(conn, &tls.Config{
+			tlsConn := tls.Client(conn, applyScanTLSRoots(&tls.Config{
 				ServerName:         domain,
-				InsecureSkipVerify: false, // Match Python's strict TLS context to block bad actors
-				MinVersion:         tls.VersionTLS12,
+				MinVersion:         tls.VersionTLS12, // strict system verification on desktop; relaxed only where Android lacks a trust store
 				ClientSessionCache: s.tlsSessionCache,
-			})
+			}))
 			_ = tlsConn.SetDeadline(time.Now().Add(attemptTimeout))
 
 			err = tlsConn.Handshake()

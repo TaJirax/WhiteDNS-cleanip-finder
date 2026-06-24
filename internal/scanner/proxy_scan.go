@@ -133,13 +133,27 @@ func (s *Scanner) scanProxies(rawTargets []string, opts ProxyScanOptions, verifi
 	if concurrency > 10000 {
 		concurrency = 10000
 	}
+	// Clamp to the OS file-descriptor limit so Termux/Android (default
+	// RLIMIT_NOFILE ~1024) does not exhaust its fd table and fail every dial.
+	if fdCap := maxSafeConcurrency(); fdCap > 0 && concurrency > fdCap {
+		s.logf("[DEBUG] scanProxies: capping concurrency %d -> %d (fd limit)\n", concurrency, fdCap)
+		concurrency = fdCap
+	}
 
 	timeout := opts.Timeout
 	if timeout <= 0 {
 		timeout = verifier.defaultTimeout()
 	}
-	s.ensureTransportHealthy(context.Background(), "proxy-scan", nil, timeout, 1)
-	stopHealthMonitor := s.startTransportHealthMonitor(context.Background(), "proxy-scan", nil, timeout, 1)
+	healthSummary := s.ensureTransportHealthy(context.Background(), "proxy-scan", nil, timeout, 1)
+	// Skip the pause-monitor when health sites were unreachable at startup so a
+	// device that simply cannot reach them (e.g. Termux abroad) is not stalled
+	// by false "outage" pauses mid-scan.
+	stopHealthMonitor := func() {}
+	if healthSummary.Reachable >= 1 {
+		stopHealthMonitor = s.startTransportHealthMonitor(context.Background(), "proxy-scan", nil, timeout, 1)
+	} else {
+		s.logf("[HEALTH] proxy-scan health sites unreachable at startup; running without the pause-monitor\n")
+	}
 	defer stopHealthMonitor()
 
 	// Log AFTER all variables are defined

@@ -9,12 +9,22 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
+
+// healthGateDisabled reports whether the Iranian-domain transport health gate
+// has been switched off via WHITE_DISABLE_HEALTH_GATE. This is useful when
+// testing from a VM or a network abroad that cannot reach the hardcoded health
+// sites, where the gate would otherwise pause the scan.
+func healthGateDisabled() bool {
+	v := strings.TrimSpace(os.Getenv("WHITE_DISABLE_HEALTH_GATE"))
+	return v == "1" || strings.EqualFold(v, "true") || strings.EqualFold(v, "yes")
+}
 
 var defaultTransportHealthSites = []string{
 	"snapp.ir",
@@ -87,6 +97,17 @@ const (
 	defaultTransportPauseSleep     = 3 * time.Second
 	defaultTransportHealthAttempts = 2
 	defaultTransportHealthRetryGap = 200 * time.Millisecond
+	// transportHealthFailuresToPause is how many consecutive failed monitor
+	// checks (each defaultTransportHealthInterval apart) must occur before the
+	// scan is auto-paused. This debounces transient blips caused by the scan
+	// itself crowding out the health probes on small/VM networks.
+	transportHealthFailuresToPause = 3
+	// transportHealthMaxWait bounds how long the pre-scan gate may block waiting
+	// for an Iranian health site to become reachable. On devices/networks that
+	// simply cannot reach those hardcoded sites (e.g. Termux on a non-Iran
+	// network), the gate would otherwise loop forever and no IPs would ever be
+	// scanned. After this it proceeds anyway; the debounced monitor still watches.
+	transportHealthMaxWait = 12 * time.Second
 )
 
 type TransportHealthSummary struct {
@@ -188,7 +209,14 @@ func (s *Scanner) ensureTransportHealthy(ctx context.Context, label string, site
 	if minReachable <= 0 {
 		minReachable = 1
 	}
+	if healthGateDisabled() {
+		s.logf("[HEALTH] %s transport gate disabled via WHITE_DISABLE_HEALTH_GATE; skipping pre-scan check\n", label)
+		return TransportHealthSummary{}
+	}
 
+	// Bound the gate so it can never block the scan forever on networks that
+	// cannot reach the hardcoded Iranian health sites.
+	deadline := time.Now().Add(transportHealthMaxWait)
 	for {
 		summary := s.logTransportHealth(ctx, label, sites, timeout)
 		if summary.Reachable >= minReachable {
@@ -199,13 +227,24 @@ func (s *Scanner) ensureTransportHealthy(ctx context.Context, label string, site
 			return summary
 		}
 
+		if time.Now().After(deadline) {
+			s.logf("[HEALTH] %s connectivity check inconclusive (%d/%d) after %s; proceeding with scan anyway\n", label, summary.Reachable, summary.Total, transportHealthMaxWait)
+			if s != nil && s.IsPaused() {
+				s.Resume()
+			}
+			return summary
+		}
+
 		if s != nil && !s.IsPaused() {
 			s.Pause()
-			s.logf("[HEALTH] %s connectivity lost (0/%d). Auto-pausing until at least one Iranian domain is reachable\n", label, summary.Total)
+			s.logf("[HEALTH] %s connectivity low (%d/%d). Waiting up to %s for an Iranian domain to become reachable\n", label, summary.Reachable, summary.Total, transportHealthMaxWait)
 		}
 
 		select {
 		case <-ctx.Done():
+			if s != nil && s.IsPaused() {
+				s.Resume()
+			}
 			return summary
 		case <-time.After(defaultTransportPauseSleep):
 		}
@@ -219,27 +258,44 @@ func (s *Scanner) startTransportHealthMonitor(ctx context.Context, label string,
 	if minReachable <= 0 {
 		minReachable = 1
 	}
+	if healthGateDisabled() {
+		return func() {}
+	}
 
 	monitorCtx, cancel := context.WithCancel(ctx)
 	go func() {
 		ticker := time.NewTicker(defaultTransportHealthInterval)
 		defer ticker.Stop()
+		// Debounce pausing: a single failed health check (common when a heavy
+		// scan on a small VM crowds out the health probes themselves) must not
+		// stall the whole scan. Only pause after several consecutive failures,
+		// which indicates a genuine connectivity outage rather than contention.
+		consecutiveFailures := 0
 		for {
 			select {
 			case <-monitorCtx.Done():
+				if s.IsPaused() {
+					s.Resume()
+				}
 				return
 			case <-ticker.C:
 				summary := s.logTransportHealth(monitorCtx, label, sites, timeout)
 				if summary.Reachable >= minReachable {
+					consecutiveFailures = 0
 					if s.IsPaused() {
 						s.Resume()
 						s.logf("[HEALTH] %s monitor resume: %d/%d reachable\n", label, summary.Reachable, summary.Total)
 					}
 					continue
 				}
+				consecutiveFailures++
+				if consecutiveFailures < transportHealthFailuresToPause {
+					s.logf("[HEALTH] %s monitor: health probe failed (%d/%d), %d/%d before pause\n", label, summary.Reachable, summary.Total, consecutiveFailures, transportHealthFailuresToPause)
+					continue
+				}
 				if !s.IsPaused() {
 					s.Pause()
-					s.logf("[HEALTH] %s monitor pause: no reachable Iranian domains\n", label)
+					s.logf("[HEALTH] %s monitor pause: no reachable Iranian domains after %d consecutive checks\n", label, consecutiveFailures)
 				}
 			}
 		}
