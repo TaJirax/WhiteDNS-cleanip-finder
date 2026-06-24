@@ -44,3 +44,4 @@ New Text Document.txt
 *.local
 *.secret
 *.secrets
+internal/ui/sni_crash_test.go

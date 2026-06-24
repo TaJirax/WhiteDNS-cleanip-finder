@@ -14,138 +14,129 @@ import (
 
 // ProbeOne performs a TCP+TLS handshake to the specified IP:port using the
 // provided ServerName (SNI). It returns a ProbeResult with TLS and HTTP info.
-func ProbeOne(ip, hostname string, port int, timeout time.Duration) ProbeResult {
+//
+// When strict is true, only a handshake that presents the SNI counts as a
+// success: the "retry without SNI" fallback is disabled. This is what you want
+// for domain-fronting / SNI-spoofing discovery, where the point is that the IP
+// accepts the specific SNI. When strict is false, the legacy lenient behavior
+// is kept (a no-SNI handshake still counts), useful for general reachability.
+func ProbeOne(ip, hostname string, port int, timeout time.Duration, strict bool) ProbeResult {
 	r := ProbeResult{IP: ip, Hostname: hostname, Port: port, ScannedAt: time.Now()}
 	start := time.Now()
 
-	// allow a couple of retries with exponential backoff for transient failures
-	attempts := 3
-	var conn net.Conn
-	var err error
-	for attempt := 0; attempt < attempts; attempt++ {
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
-		dialer := &net.Dialer{}
-		conn, err = dialer.DialContext(ctx, "tcp", fmt.Sprintf("%s:%d", ip, port))
-		cancel()
-		if err == nil {
-			break
-		}
-		// exponential backoff (100ms, 200ms, 400ms...)
-		backoff := time.Duration(100*(1<<attempt)) * time.Millisecond
-		time.Sleep(backoff)
-	}
-	if err != nil {
-		r.Error = err.Error()
+	conn := dialWithRetries(ip, port, timeout, 3)
+	if conn == nil {
+		r.Error = "tcp connect failed"
 		r.Success = false
 		r.LatencyMs = float64(time.Since(start).Milliseconds())
 		return r
 	}
-
-	// ensure close on exit
 	defer func() { _ = conn.Close() }()
 
 	remaining := timeout - time.Since(start)
 	if remaining <= 0 {
 		r.Error = "timeout before TLS"
-		r.Success = false
 		r.LatencyMs = float64(time.Since(start).Milliseconds())
 		return r
 	}
 
-	// Try handshake with provided SNI, if it fails try one more time without SNI
+	// Handshake presenting the requested SNI.
 	tlsConn := tls.Client(conn, &tls.Config{
 		ServerName:         hostname,
 		InsecureSkipVerify: true,
 	})
 	_ = tlsConn.SetDeadline(time.Now().Add(remaining))
-	if err := tlsConn.Handshake(); err != nil {
-		// try once without ServerName in case the server rejects SNI
-		// reopen raw TCP connection for second attempt using remaining timeout
-		remaining = timeout - time.Since(start)
-		if remaining <= 0 {
-			r.Error = "timeout before TLS retry"
-			r.Success = false
-			r.LatencyMs = float64(time.Since(start).Milliseconds())
-			return r
-		}
-		// Dial with remaining timeout
-		dctx, dcancel := context.WithTimeout(context.Background(), remaining)
-		dialer := &net.Dialer{}
-		conn2, err2 := dialer.DialContext(dctx, "tcp", fmt.Sprintf("%s:%d", ip, port))
-		dcancel()
-		if err2 != nil {
-			r.Error = err.Error()
-			r.Success = false
-			r.LatencyMs = float64(time.Since(start).Milliseconds())
-			return r
-		}
-		defer func() { _ = conn2.Close() }()
-		tlsConn2 := tls.Client(conn2, &tls.Config{InsecureSkipVerify: true})
-		_ = tlsConn2.SetDeadline(time.Now().Add(remaining))
-		if err3 := tlsConn2.Handshake(); err3 != nil {
-			r.Error = err3.Error()
-			r.Success = false
-			r.LatencyMs = float64(time.Since(start).Milliseconds())
-			return r
-		}
-		cs := tlsConn2.ConnectionState()
+	sniErr := tlsConn.Handshake()
+	if sniErr == nil {
+		// SNI was accepted — the strong, trustworthy result.
+		r.SNIAccepted = true
 		r.Success = true
+		cs := tlsConn.ConnectionState()
+		recordCertInfo(&r, cs, hostname)
 		r.LatencyMs = float64(time.Since(start).Milliseconds())
-		r.TLSVersion = tlsVersionString(cs.Version)
-		if len(cs.PeerCertificates) > 0 {
-			cert := cs.PeerCertificates[0]
-			if cert.Subject.CommonName != "" {
-				r.CertCN = cert.Subject.CommonName
-			}
-			if cert.Issuer.CommonName != "" {
-				r.CertIssuer = cert.Issuer.CommonName
-			} else if len(cert.Issuer.Organization) > 0 {
-				r.CertIssuer = strings.Join(cert.Issuer.Organization, ",")
-			}
+		if rem := timeout - time.Since(start); rem > 0 {
+			r.HTTPStatus, r.ServerHeader = probeHTTP(tlsConn, hostname, rem)
 		}
-		// probe HTTP over the established TLS connection
-		remaining = timeout - time.Since(start)
-		if remaining <= 0 {
-			r.Error = "timeout before HTTP probe"
-			r.Success = false
-			r.LatencyMs = float64(time.Since(start).Milliseconds())
-			return r
-		}
-		status, server := probeHTTP(tlsConn2, hostname, remaining)
-		r.HTTPStatus = status
-		r.ServerHeader = server
 		return r
 	}
 
-	cs := tlsConn.ConnectionState()
-	r.Success = true
-	r.LatencyMs = float64(time.Since(start).Milliseconds())
-	r.TLSVersion = tlsVersionString(cs.Version)
-
-	if len(cs.PeerCertificates) > 0 {
-		cert := cs.PeerCertificates[0]
-		if cert.Subject.CommonName != "" {
-			r.CertCN = cert.Subject.CommonName
-		}
-		if cert.Issuer.CommonName != "" {
-			r.CertIssuer = cert.Issuer.CommonName
-		} else if len(cert.Issuer.Organization) > 0 {
-			r.CertIssuer = strings.Join(cert.Issuer.Organization, ",")
-		}
+	// SNI handshake failed.
+	if strict {
+		// Do not fall back: in strict mode an SNI that the edge rejects is not a
+		// usable domain-fronting / spoofing candidate.
+		r.Success = false
+		r.SNIAccepted = false
+		r.Error = "sni rejected: " + sniErr.Error()
+		r.LatencyMs = float64(time.Since(start).Milliseconds())
+		return r
 	}
 
-	// probe HTTP over the established TLS connection
+	// Lenient mode: retry once without an SNI in case the server rejects SNI.
 	remaining = timeout - time.Since(start)
 	if remaining <= 0 {
-		r.Error = "timeout before HTTP probe"
-		r.Success = false
+		r.Error = "timeout before TLS retry"
 		r.LatencyMs = float64(time.Since(start).Milliseconds())
 		return r
 	}
-	status, server := probeHTTP(tlsConn, hostname, remaining)
-	r.HTTPStatus = status
-	r.ServerHeader = server
+	conn2 := dialWithRetries(ip, port, remaining, 1)
+	if conn2 == nil {
+		r.Error = sniErr.Error()
+		r.LatencyMs = float64(time.Since(start).Milliseconds())
+		return r
+	}
+	defer func() { _ = conn2.Close() }()
+	tlsConn2 := tls.Client(conn2, &tls.Config{InsecureSkipVerify: true})
+	_ = tlsConn2.SetDeadline(time.Now().Add(remaining))
+	if err := tlsConn2.Handshake(); err != nil {
+		r.Error = err.Error()
+		r.LatencyMs = float64(time.Since(start).Milliseconds())
+		return r
+	}
+	// Reached only without SNI: TLS works but the SNI itself was not accepted.
+	r.Success = true
+	r.SNIAccepted = false
+	cs := tlsConn2.ConnectionState()
+	recordCertInfo(&r, cs, hostname)
+	r.LatencyMs = float64(time.Since(start).Milliseconds())
+	if rem := timeout - time.Since(start); rem > 0 {
+		r.HTTPStatus, r.ServerHeader = probeHTTP(tlsConn2, hostname, rem)
+	}
 	return r
+}
+
+// dialWithRetries opens a TCP connection with bounded exponential backoff.
+func dialWithRetries(ip string, port int, timeout time.Duration, attempts int) net.Conn {
+	for attempt := 0; attempt < attempts; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", fmt.Sprintf("%s:%d", ip, port))
+		cancel()
+		if err == nil {
+			return conn
+		}
+		time.Sleep(time.Duration(100*(1<<attempt)) * time.Millisecond)
+	}
+	return nil
+}
+
+// recordCertInfo fills cert fields and whether the leaf certificate is valid for
+// the requested hostname (a strong domain-fronting / spoofing signal).
+func recordCertInfo(r *ProbeResult, cs tls.ConnectionState, hostname string) {
+	r.TLSVersion = tlsVersionString(cs.Version)
+	if len(cs.PeerCertificates) == 0 {
+		return
+	}
+	cert := cs.PeerCertificates[0]
+	if cert.Subject.CommonName != "" {
+		r.CertCN = cert.Subject.CommonName
+	}
+	if cert.Issuer.CommonName != "" {
+		r.CertIssuer = cert.Issuer.CommonName
+	} else if len(cert.Issuer.Organization) > 0 {
+		r.CertIssuer = strings.Join(cert.Issuer.Organization, ",")
+	}
+	if hostname != "" && cert.VerifyHostname(hostname) == nil {
+		r.CertMatchesSNI = true
+	}
 }
 
 func tlsVersionString(v uint16) string {
@@ -279,7 +270,7 @@ func RunScan(cfg ScanConfig, resultCh chan<- ProbeResult, progressCh chan<- int)
 		go func(ip, host string) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			res := ProbeOne(ip, host, cfg.Port, timeout)
+			res := ProbeOne(ip, host, cfg.Port, timeout, cfg.StrictSNI)
 			if resultCh != nil {
 				resultCh <- res
 			}
@@ -292,8 +283,18 @@ func RunScan(cfg ScanConfig, resultCh chan<- ProbeResult, progressCh chan<- int)
 	wg.Wait()
 }
 
+// maxIPsPerCIDR caps how many addresses a single CIDR contributes. Large blocks
+// are capped (not skipped) so big ASN networks like /14 are still scanned — this
+// mirrors the IP scanner's expandCIDR behavior. Previously these were dropped
+// entirely, so ASN selections were silently ignored by the SNI scanner.
+const maxIPsPerCIDR = 65536
+
+// ExpandTargets is the exported form of expandTargets so callers can compute an
+// accurate probe total (expanded IPs × hostnames) up front for progress display.
+func ExpandTargets(raw []string) []string { return expandTargets(raw) }
+
 // expandTargets expands CIDR ranges and single IPs into a list of IP strings.
-// Skips ranges larger than 65536 IPs.
+// CIDRs larger than maxIPsPerCIDR are capped to the first maxIPsPerCIDR hosts.
 func expandTargets(raw []string) []string {
 	seen := make(map[string]struct{})
 	var out []string
@@ -307,12 +308,13 @@ func expandTargets(raw []string) []string {
 			if err != nil {
 				continue
 			}
-			// count addresses in network
+			// Count addresses in the network, guarding against int overflow for
+			// very large prefixes (e.g. IPv6 or small IPv4 prefixes).
 			ones, bits := ipnet.Mask.Size()
-			count := 1 << (bits - ones)
-			if count > 65536 {
-				// skip too large
-				continue
+			shift := bits - ones
+			count := maxIPsPerCIDR + 1
+			if shift < 31 {
+				count = 1 << shift
 			}
 			startIP := ipToBigInt(ipnet.IP)
 			endIP := ipToBigInt(lastIP(ipnet))
@@ -339,10 +341,12 @@ func expandTargets(raw []string) []string {
 				}
 				continue
 			}
-			// iterate only usable hosts: exclude network and broadcast addresses
+			// Iterate usable hosts (exclude network and broadcast), capping large
+			// blocks at maxIPsPerCIDR so they are partially scanned, not skipped.
 			firstHost := new(big.Int).Add(startIP, big.NewInt(1))
 			lastHost := new(big.Int).Sub(endIP, big.NewInt(1))
-			for cur := firstHost; cur.Cmp(lastHost) <= 0; cur.Add(cur, big.NewInt(1)) {
+			added := 0
+			for cur := firstHost; cur.Cmp(lastHost) <= 0 && added < maxIPsPerCIDR; cur.Add(cur, big.NewInt(1)) {
 				ipStr := bigIntToIP(cur, ip.To4() == nil)
 				if ipStr == "" {
 					continue
@@ -350,6 +354,7 @@ func expandTargets(raw []string) []string {
 				if _, ok := seen[ipStr]; !ok {
 					seen[ipStr] = struct{}{}
 					out = append(out, ipStr)
+					added++
 				}
 			}
 		} else {

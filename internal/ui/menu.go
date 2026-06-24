@@ -1444,13 +1444,16 @@ func saveScanOutputResults(dataDir, scanKind string, endpoints []string, operati
 	// If SNI scanner, also write a CSV containing status per-host
 	if operationType == "sni_scanner" || operationType == "desync_scanner" {
 		csvLines := make([]string, 0, len(endpoints)+1)
-		csvLines = append(csvLines, "hostname,ip,port,status,latency_ms,tls_version,http_status")
+		csvLines = append(csvLines, "hostname,ip,port,status,latency_ms,tls_version,http_status,sni_accepted,cert_matches_sni")
 		for _, ep := range endpoints {
-			// expected format: "hostname ip:port STATUS latency TLSVersion HTTPStatus"
+			// expected format: "hostname ip:port STATUS latency TLSVersion HTTPStatus [marker]"
+			// SNI usability is encoded as a trailing [cert-match]/[sni-ok] marker.
+			sniAccepted := strings.Contains(ep, "[cert-match]") || strings.Contains(ep, "[sni-ok]")
+			certMatch := strings.Contains(ep, "[cert-match]")
 			parts := strings.Fields(ep)
 			if len(parts) < 3 {
 				// unknown format
-				csvLines = append(csvLines, fmt.Sprintf(",%s,,,,", ep))
+				csvLines = append(csvLines, fmt.Sprintf(",%s,,,,,%t,%t", ep, sniAccepted, certMatch))
 				continue
 			}
 			hostname := parts[0]
@@ -1474,7 +1477,7 @@ func saveScanOutputResults(dataDir, scanKind string, endpoints []string, operati
 				stat = "UNKNOWN"
 			}
 			// build CSV line
-			csvLines = append(csvLines, fmt.Sprintf("%s,%s,%s,%s,%s,%s", hostname, ipport, status, latency, tlsv, httpst))
+			csvLines = append(csvLines, fmt.Sprintf("%s,%s,%s,%s,%s,%s,%t,%t", hostname, ipport, status, latency, tlsv, httpst, sniAccepted, certMatch))
 		}
 		csvPath := filepath.Join(outDir, fmt.Sprintf("sni-%s-%s.csv", scanKind, stamp))
 		if err := storage.AtomicWriteText(csvPath, strings.Join(csvLines, "\n")); err != nil {

@@ -157,6 +157,7 @@ const (
 	screenSetProxyPort      = "set_proxy_port"
 	screenScanResults       = "scan_results"
 	screenSNISource         = "sni_source"
+	screenSNIMode           = "sni_mode"
 )
 
 const maxAllowedConcurrency = 10000
@@ -193,6 +194,9 @@ type scanConfig struct {
 	// SNIDomains overrides the SNI hostnames probed by the SNI scanner. When
 	// empty the scanner falls back to the built-in + managed default list.
 	SNIDomains []string
+	// SNIStrict requires the TLS handshake to accept the presented SNI before a
+	// pair is counted (for domain-fronting / SNI-spoofing discovery).
+	SNIStrict bool
 }
 
 type menuItem struct {
@@ -705,6 +709,8 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m, screenCmd = m.handleScanModeScreen(msg)
 	case screenSNISource:
 		m, screenCmd = m.handleSNISourceScreen(msg)
+	case screenSNIMode:
+		m, screenCmd = m.handleSNIModeScreen(msg)
 	case screenSelectASN:
 		m, screenCmd = m.handleSelectASNScreen(msg)
 	case screenTypeTargets:
@@ -772,6 +778,8 @@ func (m tuiModel) View() string {
 		body = m.viewScanMode(w, h)
 	case screenSNISource:
 		body = m.viewSNISource(w, h)
+	case screenSNIMode:
+		body = m.viewSNIMode(w, h)
 	case screenSelectASN:
 		body = m.viewSelectASN(w, h)
 	case screenTypeTargets:
@@ -1278,7 +1286,22 @@ func (m tuiModel) viewScanning(w, h int) string {
 	if barW < 10 {
 		barW = 10
 	}
+	// Clamp progress so a total that undercounts actual work (e.g. the SNI
+	// scanner reports CIDR-count, not expanded-IP-count) can never drive filled
+	// past barW — strings.Repeat with a negative count panics and crashes the UI.
+	if progress > 1.0 {
+		progress = 1.0
+	}
+	if progress < 0 {
+		progress = 0
+	}
 	filled := int(float64(barW) * progress)
+	if filled > barW {
+		filled = barW
+	}
+	if filled < 0 {
+		filled = 0
+	}
 	// gradient: smooth interpolated hex gradient across filled width
 	gradientStops := []string{"#00d1ff", "#7fff00", "#ffb400", "#ff4081", "#8a2be2"}
 	// helper: interpolate between two hex colors
@@ -2011,7 +2034,7 @@ func (m tuiModel) handleSNISourceScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 			m.addLog(fmt.Sprintf("Using %d custom SNI domain(s)", len(domains)))
 			m.ti.Blur()
 			m.tiStep = 0
-			m.screen = screenScanMode
+			m.screen = screenSNIMode
 			m.cursor = 0
 			return m, nil
 		}
@@ -2040,10 +2063,47 @@ func (m tuiModel) handleSNISourceScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 		}
 		m.scanConfig.SNIDomains = nil
 		m.addLog("Using default SNI probe domains")
+		m.screen = screenSNIMode
+		m.cursor = 0
+	}
+	return m, nil
+}
+
+// handleSNIModeScreen lets the user choose strict SNI matching (for
+// domain-fronting / SNI-spoofing discovery) versus lenient reachability.
+func (m tuiModel) handleSNIModeScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
+	k, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return m, nil
+	}
+	switch k.String() {
+	case "up", "k":
+		if m.cursor > 0 {
+			m.cursor--
+		}
+	case "down", "j":
+		if m.cursor < 1 {
+			m.cursor++
+		}
+	case "enter":
+		m.scanConfig.SNIStrict = m.cursor == 0
+		if m.scanConfig.SNIStrict {
+			m.addLog("SNI mode: strict (SNI must be accepted; cert match reported)")
+		} else {
+			m.addLog("SNI mode: lenient (any TLS handshake counts)")
+		}
 		m.screen = screenScanMode
 		m.cursor = 0
 	}
 	return m, nil
+}
+
+func (m tuiModel) viewSNIMode(w, h int) string {
+	items := []string{
+		"Strict - SNI must be accepted (domain fronting / spoof)",
+		"Lenient - any TLS handshake counts (reachability)",
+	}
+	return m.viewList(w, h, "SNI MATCH MODE", items, "↑↓ navigate  ·  Enter select  ·  Esc back")
 }
 
 // parseSNIDomains splits a raw user string into normalized, deduped domains.
@@ -3109,20 +3169,27 @@ func (m tuiModel) cmdPoolOperation(opType string, asnNetworks []string) tea.Cmd 
 						return poolOperationCompleteMsg{operationType: opType, results: []string{"SNI scan aborted: " + reason}, duration: time.Since(t0)}
 					}
 					go func() {
-						cfg := tlsprobe.ScanConfig{
+						probeCfg := tlsprobe.ScanConfig{
 							Targets:     append([]string(nil), targets...),
 							Hostnames:   append([]string(nil), opts.ProbeDomainsHTTPS...),
 							Port:        ports[0],
 							TimeoutSec:  float64(timeout.Seconds()),
 							Concurrency: opts.Concurrency,
+							StrictSNI:   cfg.SNIStrict,
 						}
-						tlsprobe.RunScan(cfg, resCh, nil)
+						tlsprobe.RunScan(probeCfg, resCh, nil)
 					}()
 
 					var sniResults []string
 					processed := 0
 					hits := 0
-					totalProbes := len(targets) * len(opts.ProbeDomainsHTTPS)
+					// Use the expanded IP count (not the CIDR count) so progress
+					// reflects the actual number of probes.
+					expandedIPs := len(tlsprobe.ExpandTargets(targets))
+					if expandedIPs == 0 {
+						expandedIPs = len(targets)
+					}
+					totalProbes := expandedIPs * len(opts.ProbeDomainsHTTPS)
 					startScan := time.Now()
 					for pr := range resCh {
 						processed++
@@ -3132,6 +3199,14 @@ func (m tuiModel) cmdPoolOperation(opType string, asnNetworks []string) tea.Cmd 
 							hits++
 						}
 						text := fmt.Sprintf("%s %s:%d %s %dms %s %d", pr.Hostname, pr.IP, pr.Port, statusLabel, int(pr.LatencyMs), pr.TLSVersion, pr.HTTPStatus)
+						// Tag SNI-spoof / domain-front usability: cert-match is the
+						// strongest signal, then SNI-accepted. Appended after the
+						// positional fields so existing parsers are unaffected.
+						if pr.CertMatchesSNI {
+							text += " [cert-match]"
+						} else if pr.SNIAccepted {
+							text += " [sni-ok]"
+						}
 						// forward as logMsg for live UI
 						select {
 						case ch <- logMsg{text: text}:
@@ -3140,7 +3215,7 @@ func (m tuiModel) cmdPoolOperation(opType string, asnNetworks []string) tea.Cmd 
 
 						// Write incremental CSV and failed/passed files so results are available in real-time
 						if m.scanCSVPath != "" {
-							csvLine := fmt.Sprintf("%s,%s:%d,%s,%d,%s,%d", pr.Hostname, pr.IP, pr.Port, statusLabel, int(pr.LatencyMs), pr.TLSVersion, pr.HTTPStatus)
+							csvLine := fmt.Sprintf("%s,%s:%d,%s,%d,%s,%d,%t,%t", pr.Hostname, pr.IP, pr.Port, statusLabel, int(pr.LatencyMs), pr.TLSVersion, pr.HTTPStatus, pr.SNIAccepted, pr.CertMatchesSNI)
 							_ = storage.AppendLine(m.scanCSVPath, csvLine)
 						}
 
@@ -3533,7 +3608,7 @@ func (m *tuiModel) startScanLogFile(scanKind string, targets []string, ports []i
 			if absCSV, err := filepath.Abs(csvPath); err == nil {
 				csvPath = absCSV
 			}
-			_ = os.WriteFile(csvPath, []byte("hostname,ipport,status,latency_ms,tls_version,http_status\n"), 0o644)
+			_ = os.WriteFile(csvPath, []byte("hostname,ipport,status,latency_ms,tls_version,http_status,sni_accepted,cert_matches_sni\n"), 0o644)
 			m.scanCSVPath = csvPath
 		} else if scanKind == "ipscan" {
 			domainPassPath := filepath.Join(logDir, fmt.Sprintf("domain-passes-%s-%s.txt", scanKind, stamp))
