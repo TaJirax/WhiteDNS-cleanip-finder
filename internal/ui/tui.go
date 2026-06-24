@@ -18,12 +18,10 @@ import (
 
 	"whitedns-go/internal/bundledata"
 	"whitedns-go/internal/config"
-	"whitedns-go/internal/mmdf"
 	"whitedns-go/internal/scanner"
 	"whitedns-go/internal/storage"
 	"whitedns-go/internal/tlsprobe"
 
-	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -145,16 +143,12 @@ const (
 	screenSelectTransfer    = "select_transfer_mode"
 	screenSelectConcurrency = "select_concurrency"
 	screenScanning          = "scanning"
-	screenInstantConnect    = "instant_connect"
-	screenManageRules       = "manage_rules"
 	screenEditDPITarget     = "edit_dpi_target"
 	screenManageDPISettings = "manage_dpi_settings"
 	screenManageTLSProbe    = "manage_tls_probe"
 	screenToggleProbeFlags  = "toggle_probe_flags"
 	screenInspectIP         = "inspect_ip"
 	screenReloadPool        = "reload_pool"
-	screenForceReroute      = "force_reroute"
-	screenSetProxyPort      = "set_proxy_port"
 	screenScanResults       = "scan_results"
 	screenSNISource         = "sni_source"
 	screenSNIMode           = "sni_mode"
@@ -346,6 +340,10 @@ type tuiModel struct {
 	pasteConfirmAt time.Time
 	// lastEnterTime: track when last Enter was pressed to detect paste-generated Enters
 	lastEnterTime time.Time
+	// pasteBuffer accumulates terminal bracketed-paste content (incl. newlines)
+	// so multi-line target pastes work without relying on an OS clipboard tool
+	// (xclip/xsel), which many Linux/Termux/SSH users do not have installed.
+	pasteBuffer string
 	// parsed target review state
 	parsedTargetStats   *scanner.ParseTargetStats
 	parsedTargetsScroll int
@@ -373,21 +371,15 @@ func NewTUI(a *App) *tuiModel {
 		{key: "4", label: "SNI Scanner (TLS Hostname Probe)", action: "sni_scanner"},
 		{key: "5", label: "Reload IP Pool", action: "reload_pool"},
 		{key: "6", label: "Manage IP Pool", action: "manage_pool"},
-		{key: "7", label: "Instant Connect", action: "instant_connect"},
-		{key: "8", label: "Force Reroute Domain", action: "force_reroute"},
-		{key: "a", label: "Inspect IPs (ASN)", action: "inspect_ip"},
-		{key: "b", label: "Export ASN IPs", action: "export_asn"},
-		{key: "c", label: "Manage Rules", action: "manage_rules"},
-		{key: "d", label: "Set Proxy Port", action: "set_proxy_port"},
-		{key: "e", label: "Autotune Scan Rates", action: "autotune"},
-		{key: "f", label: "Install MMDF CA", action: "install_mmdf_ca"},
-		{key: "g", label: "Desync Scanner", action: "desync_scanner"},
-		{key: "M", label: "Manage SNI Probe Domains", action: "manage_tls_probe"},
-		{key: "T", label: "Settings: Probe Heuristics", action: "toggle_probe_flags"},
-		{key: "C", label: "Config Maker", action: "config_maker"},
-		{key: "n", label: "Configure Desync", action: "configure_desync"},
-		{key: "x", label: "Clear Cache", action: "clear_cache"},
-		{key: "w", label: "Start Proxy (White)", action: "start_proxy_white"},
+		{key: "7", label: "Inspect IPs (ASN)", action: "inspect_ip"},
+		{key: "8", label: "Export ASN IPs", action: "export_asn"},
+		{key: "9", label: "Autotune Scan Rates", action: "autotune"},
+		{key: "10", label: "Desync Scanner", action: "desync_scanner"},
+		{key: "11", label: "Manage SNI Probe Domains", action: "manage_tls_probe"},
+		{key: "12", label: "Settings: Probe Heuristics", action: "toggle_probe_flags"},
+		{key: "13", label: "Config Maker", action: "config_maker"},
+		{key: "14", label: "Configure Desync", action: "configure_desync"},
+		{key: "15", label: "Clear Cache", action: "clear_cache"},
 		{key: "0", label: "Exit", action: "exit"},
 	}
 
@@ -727,10 +719,6 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m, screenCmd = m.handleSelectConcurrencyScreen(msg)
 	case screenScanning:
 		m, screenCmd = m.handleScanningScreen(msg)
-	case screenInstantConnect:
-		m, screenCmd = m.handleInstantConnectScreen(msg)
-	case screenManageRules:
-		m, screenCmd = m.handleManageRulesScreen(msg)
 	case screenConfigMaker:
 		m, screenCmd = m.handleConfigMakerScreen(msg)
 	case screenEditDPITarget:
@@ -743,10 +731,6 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m, screenCmd = m.handleToggleProbeFlagsScreen(msg)
 	case screenInspectIP:
 		m, screenCmd = m.handleInspectIPScreen(msg)
-	case screenForceReroute:
-		m, screenCmd = m.handleForceRerouteScreen(msg)
-	case screenSetProxyPort:
-		m, screenCmd = m.handleSetProxyPortScreen(msg)
 	case screenScanResults:
 		m, screenCmd = m.handleScanResultsScreen(msg)
 	}
@@ -798,26 +782,18 @@ func (m tuiModel) View() string {
 		body = m.viewScanning(w, h)
 	case screenScanResults:
 		body = m.viewScanResults(w, h)
-	case screenManageRules:
-		body = m.viewManageRules(w, h)
 	case screenConfigMaker:
 		body = m.viewConfigMaker(w, h)
 	case screenManageDPISettings:
 		body = m.viewManageDPISettings(w, h)
 	case screenToggleProbeFlags:
 		body = m.viewToggleProbeFlags(w, h)
-	case screenInstantConnect:
-		body = m.viewSimpleInput(w, h, "Instant Connect", "IP:port endpoints (space separated)")
 	case screenEditDPITarget:
 		body = m.viewEditDPITarget(w, h)
 	case screenManageTLSProbe:
 		body = m.viewManageTLSProbe(w, h)
 	case screenInspectIP:
 		body = m.viewSimpleInput(w, h, "Inspect IP", "Enter IP address")
-	case screenForceReroute:
-		body = m.viewForceReroute(w, h)
-	case screenSetProxyPort:
-		body = m.viewSetProxyPort(w, h)
 	default:
 		body = m.viewMenu(w, h)
 	}
@@ -1627,36 +1603,6 @@ func (m tuiModel) viewScanResults(w, h int) string {
 	return panel + "\n\n" + sDim.Render("up/down scroll  |  s save  |  Enter/q back to menu")
 }
 
-func (m tuiModel) viewManageRules(w, h int) string {
-	inner := w - 6
-	if m.tiStep == 2 || m.tiStep == 3 {
-		ruleType := "always_route"
-		if m.tiStep == 3 {
-			ruleType = "do_not_route"
-		}
-		panel := panelStyle(cBorderActive).Width(inner).Render(
-			sHeader.Render(" ADD "+strings.ToUpper(ruleType)+" RULE ") + "\n\n" +
-				"  " + m.ti.View(),
-		)
-		return panel + "\n\n" + sDim.Render("Enter save  |  Esc cancel")
-	}
-
-	items := []string{
-		"[1]  Add always_route rule",
-		"[2]  Add do_not_route rule",
-		"[3]  List rules (log)",
-		"[4]  Clear all rules",
-	}
-	var rows strings.Builder
-	for _, it := range items {
-		rows.WriteString(sNormal.Render(it) + "\n")
-	}
-	panel := panelStyle(cBorderActive).Width(inner).Render(
-		sHeader.Render(" MANAGE RULES ") + "\n\n" + rows.String(),
-	)
-	return panel + "\n\n" + sDim.Render("1-4 select  |  Esc back")
-}
-
 func (m tuiModel) viewManageDPISettings(w, h int) string {
 	inner := w - 6
 	state := m.dpiState
@@ -1694,22 +1640,6 @@ func (m tuiModel) viewSimpleInput(w, h int, title, placeholder string) string {
 	panel := panelStyle(cBorderActive).Width(inner).Render(
 		sHeader.Render(" "+strings.ToUpper(title)+" ") + "\n\n" +
 			sDim.Render("  "+placeholder+"\n\n") +
-			"  " + m.ti.View(),
-	)
-	return panel + "\n\n" + sDim.Render("Enter confirm  |  Esc back")
-}
-
-func (m tuiModel) viewForceReroute(w, h int) string {
-	inner := w - 6
-	var step string
-	if m.tiStep == 1 {
-		step = "Step 1/2 - enter domain"
-	} else {
-		step = fmt.Sprintf("Step 2/2 - enter endpoint for %s", m.stepData["domain"])
-	}
-	panel := panelStyle(cBorderActive).Width(inner).Render(
-		sHeader.Render(" FORCE REROUTE ") + "\n\n" +
-			sInfo.Render("  "+step+"\n\n") +
 			"  " + m.ti.View(),
 	)
 	return panel + "\n\n" + sDim.Render("Enter confirm  |  Esc back")
@@ -1760,16 +1690,6 @@ func (m tuiModel) viewManageTLSProbe(w, h int) string {
 			"  " + m.ti.View(),
 	)
 	return panel + "\n\n" + sDim.Render("Paste domains and press Enter to save  |  Esc back")
-}
-
-func (m tuiModel) viewSetProxyPort(w, h int) string {
-	inner := w - 6
-	panel := panelStyle(cBorderActive).Width(inner).Render(
-		sHeader.Render(" SET PROXY PORT ") + "\n\n" +
-			sInfo.Render(fmt.Sprintf("  Current port: %d\n\n", m.app.Cfg.ProxyPort)) +
-			"  " + m.ti.View(),
-	)
-	return panel + "\n\n" + sDim.Render("Enter confirm  |  Esc back")
 }
 
 // ------------------------------------------------------------
@@ -1911,13 +1831,6 @@ func (m tuiModel) activateMenuItem() (tuiModel, tea.Cmd) {
 		m.resetASNScreen("Search ASN for pool reload")
 	case "manage_pool":
 		return m, m.cmdManagePool()
-	case "instant_connect":
-		m.pushScreen(screenInstantConnect)
-		m.setupInput("Enter IP:port endpoints (space separated)")
-	case "force_reroute":
-		m.pushScreen(screenForceReroute)
-		m.tiStep = 1
-		m.setupInput("Enter domain")
 	case "inspect_ip":
 		m.pushScreen(screenSelectASN)
 		m.operationType = "inspect_pool"
@@ -1927,20 +1840,12 @@ func (m tuiModel) activateMenuItem() (tuiModel, tea.Cmd) {
 		m.operationType = "export_asn"
 		m.scanConfig.ASNs = nil
 		m.resetASNScreen("Search ASN to export")
-	case "manage_rules":
-		m.pushScreen(screenManageRules)
-		m.tiStep = 1
 	case "edit_dpi_target":
 		m.pushScreen(screenEditDPITarget)
 		m.tiStep = 1
 		m.setupInput("Enter DPI SNI")
-	case "set_proxy_port":
-		m.pushScreen(screenSetProxyPort)
-		m.setupInput(fmt.Sprintf("Current %d - enter new port", m.app.Cfg.ProxyPort))
 	case "autotune":
 		m.setToast(sInfo.Render("Tip: use direct for <30 targets, masscan for large scans"), 5*time.Second)
-	case "install_mmdf_ca":
-		return m, m.cmdInstallMMDFCA()
 	case "desync_scanner":
 		m.addLog("Desync Pair Miner opened (native flow)")
 		m.setToast(sInfo.Render("Native mode: scans SNI/IP pairs and writes desync_pairs.json"), 5*time.Second)
@@ -1976,9 +1881,6 @@ func (m tuiModel) activateMenuItem() (tuiModel, tea.Cmd) {
 		m.app.Scanner.ClearCache()
 		m.addLog("Cache cleared")
 		m.setToast(sSuccess.Render("OK Cache cleared"), 3*time.Second)
-	case "start_proxy_white":
-		m.addLog("Starting proxy (white mode)...")
-		return m, m.cmdStartProxy("white_ip")
 	case "exit":
 		return m, tea.Quit
 	}
@@ -2024,6 +1926,9 @@ func (m tuiModel) handleScanModeScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 // SNI scanner: the managed default list, or their own domains entered inline.
 func (m tuiModel) handleSNISourceScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 	if m.tiStep == 1 {
+		if m.pasteClipboardIntoInput(msg, false) {
+			return m, nil
+		}
 		if k, ok := msg.(tea.KeyMsg); ok && k.String() == "enter" {
 			domains := parseSNIDomains(m.ti.Value())
 			if len(domains) == 0 {
@@ -2146,6 +2051,9 @@ func (m tuiModel) handleSelectASNScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 
 	// Only route keys into the search box while typing is enabled.
 	if m.typingEnabled {
+		if m.pasteClipboardIntoInput(msg, false) {
+			return m, nil
+		}
 		m.ti, _ = m.ti.Update(msg)
 	} else {
 		// Keep the input untouched while selection mode is active.
@@ -2248,47 +2156,67 @@ func (m *tuiModel) selectAllASNs() {
 
 func (m tuiModel) handleTypeTargetsScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 	k, ok := msg.(tea.KeyMsg)
+	if m.pasteClipboardIntoInput(msg, true) {
+		m.setToast(sInfo.Render("Pasted — press Enter to review"), 2*time.Second)
+		return m, nil
+	}
+	// Bracketed paste: the terminal delivers the whole paste (with newlines) in
+	// one KeyMsg. Capture it directly so we never depend on an OS clipboard tool.
+	if ok && k.Paste {
+		m.pasteBuffer += string(k.Runes)
+		// Show a single-line preview in the input so the user sees it registered.
+		flat := strings.Join(strings.Fields(strings.ReplaceAll(m.pasteBuffer, "\n", " ")), " ")
+		m.ti.SetValue(flat)
+		m.setToast(sInfo.Render("Pasted — press Enter to review"), 2*time.Second)
+		return m, nil
+	}
 	if ok && k.String() == "enter" {
 		raw := m.ti.Value()
-		// In paste mode, filter out rapid-fire Enters (from newlines in pasted content)
-		// Only real manual Enters (from user) should have >50ms gap
-		if m.scanConfig.Mode == "paste" {
+		havePaste := strings.TrimSpace(m.pasteBuffer) != ""
+		if havePaste {
+			// Bracketed paste already captured the full multi-line content, so
+			// submit it directly — no rapid-Enter filtering, confirm step, or
+			// OS-clipboard dependency needed.
+			raw = m.pasteBuffer
+		} else if m.scanConfig.Mode == "paste" {
+			// Fallback path for terminals without bracketed paste (newlines arrive
+			// as Enter keystrokes). Filter rapid-fire Enters from pasted newlines.
 			now := time.Now()
 			if !m.lastEnterTime.IsZero() && now.Sub(m.lastEnterTime) < 50*time.Millisecond {
-				// This is likely a newline from the pasted content, ignore it
 				m.lastEnterTime = now
 				m.ti, _ = m.ti.Update(msg)
 				return m, nil
 			}
 			m.lastEnterTime = now
-		}
 
-		// In paste mode, require a confirmation Enter to avoid instant submission when pasting
-		if m.scanConfig.Mode == "paste" {
+			// Require a confirmation Enter to avoid instant submission when pasting.
 			if !m.pasteConfirm {
 				m.pasteConfirm = true
 				m.pasteConfirmAt = time.Now()
 				m.setToast(sInfo.Render("Press Enter again to proceed with review"), 2*time.Second)
 				return m, nil
 			}
-			// if confirmation expired, treat this Enter as the first confirm again
 			if time.Since(m.pasteConfirmAt) > 10*time.Second {
 				m.pasteConfirmAt = time.Now()
 				m.setToast(sInfo.Render("Press Enter again to proceed with review"), 2*time.Second)
 				return m, nil
 			}
-			// proceed to review targets
 			m.pasteConfirm = false
+			// Note: the OS clipboard is intentionally NOT read here. Doing so
+			// injected whatever was already on the clipboard (e.g. IPs copied
+			// earlier) even when the user pasted nothing. Real pastes are captured
+			// via bracketed paste (m.pasteBuffer) above.
 
-			if clipText, err := clipboard.ReadAll(); err == nil {
-				clipText = strings.TrimSpace(clipText)
-				if clipText != "" {
-					raw = clipText
-				}
+			// Last resort: pull from the OS clipboard (works on Windows/macOS; on
+			// Linux requires xclip/xsel, which is why bracketed paste is preferred).
+			if clipText := readClipboardText(); clipText != "" {
+				raw = clipText
 			}
 		}
 
 		raw = strings.TrimSpace(raw)
+		m.pasteBuffer = ""
+		m.pasteConfirm = false
 		if raw == "" {
 			m.goBack()
 			return m, nil
@@ -2357,6 +2285,9 @@ func (m tuiModel) handleReviewTargetsScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 
 func (m tuiModel) handleSelectPortsScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 	if m.tiStep == 1 {
+		if m.pasteClipboardIntoInput(msg, false) {
+			return m, nil
+		}
 		k, ok := msg.(tea.KeyMsg)
 		if ok && k.String() == "enter" {
 			m.scanConfig.PortsString = strings.TrimSpace(m.ti.Value())
@@ -2589,70 +2520,6 @@ func (m tuiModel) handleScanningScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 	return m, nil
 }
 
-func (m tuiModel) handleInstantConnectScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
-	if k, ok := msg.(tea.KeyMsg); ok && k.String() == "enter" {
-		raw := strings.TrimSpace(m.ti.Value())
-		count := 0
-		for _, ep := range strings.Fields(raw) {
-			m.app.Router.AddRouteToCache("instant", ep, 700.0, true)
-			count++
-		}
-		m.ti.Blur()
-		m.addLog(fmt.Sprintf("Added %d endpoints", count))
-		m.setToast(sSuccess.Render(fmt.Sprintf("OK Added %d endpoints", count)), 3*time.Second)
-		m.goBack()
-		return m, nil
-	}
-	m.ti, _ = m.ti.Update(msg)
-	return m, nil
-}
-
-func (m tuiModel) handleManageRulesScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
-	if m.tiStep == 2 || m.tiStep == 3 {
-		if k, ok := msg.(tea.KeyMsg); ok && k.String() == "enter" {
-			pattern := strings.TrimSpace(m.ti.Value())
-			if pattern != "" {
-				action := "always_route"
-				if m.tiStep == 3 {
-					action = "do_not_route"
-				}
-				if err := m.app.RuleEngine.AddRule("", pattern, action); err != nil {
-					m.setToast(sError.Render("x "+err.Error()), 4*time.Second)
-				} else {
-					m.addLog(fmt.Sprintf("Added %s: %s", action, pattern))
-					m.setToast(sSuccess.Render("OK Rule added"), 3*time.Second)
-				}
-			}
-			m.ti.Blur()
-			m.tiStep = 1
-			return m, nil
-		}
-		m.ti, _ = m.ti.Update(msg)
-		return m, nil
-	}
-
-	if k, ok := msg.(tea.KeyMsg); ok {
-		switch k.String() {
-		case "1":
-			m.tiStep = 2
-			m.setupInput("Pattern for always_route")
-		case "2":
-			m.tiStep = 3
-			m.setupInput("Pattern for do_not_route")
-		case "3":
-			a, d := m.app.RuleEngine.GetAllRules()
-			m.addLog(fmt.Sprintf("Rules - always:%d  do_not:%d", len(a), len(d)))
-		case "4":
-			m.app.RuleEngine.ClearRules()
-			m.addLog("All rules cleared")
-			m.setToast(sSuccess.Render("OK Rules cleared"), 3*time.Second)
-		case "enter":
-			m.goBack()
-		}
-	}
-	return m, nil
-}
-
 func (m tuiModel) handleManageDPISettingsScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 	if k, ok := msg.(tea.KeyMsg); ok {
 		switch k.String() {
@@ -2718,6 +2585,9 @@ func (m tuiModel) handleManageDPISettingsScreen(msg tea.Msg) (tuiModel, tea.Cmd)
 }
 
 func (m tuiModel) handleEditDPITargetScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
+	if m.pasteClipboardIntoInput(msg, false) {
+		return m, nil
+	}
 	if k, ok := msg.(tea.KeyMsg); ok && k.String() == "enter" {
 		raw := strings.TrimSpace(m.ti.Value())
 		if raw == "" {
@@ -2743,6 +2613,9 @@ func (m tuiModel) handleEditDPITargetScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 }
 
 func (m tuiModel) handleManageTLSProbeScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
+	if m.pasteClipboardIntoInput(msg, false) {
+		return m, nil
+	}
 	if k, ok := msg.(tea.KeyMsg); ok && k.String() == "enter" {
 		raw := strings.TrimSpace(m.ti.Value())
 		if raw == "" {
@@ -2770,6 +2643,9 @@ func (m tuiModel) handleManageTLSProbeScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 }
 
 func (m tuiModel) handleInspectIPScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
+	if m.pasteClipboardIntoInput(msg, false) {
+		return m, nil
+	}
 	if k, ok := msg.(tea.KeyMsg); ok && k.String() == "enter" {
 		raw := strings.TrimSpace(m.ti.Value())
 		if raw == "" {
@@ -2778,51 +2654,6 @@ func (m tuiModel) handleInspectIPScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 		}
 		m.startOperation()
 		return m, m.cmdInspectIP(raw)
-	}
-	m.ti, _ = m.ti.Update(msg)
-	return m, nil
-}
-
-func (m tuiModel) handleForceRerouteScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
-	if k, ok := msg.(tea.KeyMsg); ok && k.String() == "enter" {
-		raw := strings.TrimSpace(m.ti.Value())
-		if raw == "" {
-			m.goBack()
-			return m, nil
-		}
-		if m.tiStep == 1 {
-			m.stepData["domain"] = raw
-			m.tiStep = 2
-			m.ti.SetValue("")
-			return m, nil
-		}
-		domain := m.stepData["domain"]
-		m.app.Router.AddRouteToCache("reroute", raw, 600.0, true)
-		m.addLog(fmt.Sprintf("Rerouted %s -> %s", domain, raw))
-		m.stepData = make(map[string]string)
-		m.tiStep = 0
-		m.ti.Blur()
-		m.goBack()
-		return m, nil
-	}
-	m.ti, _ = m.ti.Update(msg)
-	return m, nil
-}
-
-func (m tuiModel) handleSetProxyPortScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
-	if k, ok := msg.(tea.KeyMsg); ok && k.String() == "enter" {
-		raw := strings.TrimSpace(m.ti.Value())
-		port, err := strconv.Atoi(raw)
-		if err != nil || port < 1 || port > 65535 {
-			m.setToast(sError.Render("x Invalid port (1-65535)"), 3*time.Second)
-			return m, nil
-		}
-		m.app.Cfg.ProxyPort = port
-		m.addLog(fmt.Sprintf("Proxy port set to %d", port))
-		m.setToast(sSuccess.Render(fmt.Sprintf("OK Port set to %d", port)), 4*time.Second)
-		m.ti.Blur()
-		m.goBack()
-		return m, nil
 	}
 	m.ti, _ = m.ti.Update(msg)
 	return m, nil
@@ -3420,20 +3251,6 @@ func (m tuiModel) cmdManagePool() tea.Cmd {
 	}
 }
 
-func (m tuiModel) cmdInstallMMDFCA() tea.Cmd {
-	return func() tea.Msg {
-		result, err := mmdf.InstallCA(m.app.DataDir)
-		if err != nil {
-			return actionCompleteMsg{title: "MMDF CA", err: err}
-		}
-		msg := "Install finished"
-		if v, ok := result["message"].(string); ok && v != "" {
-			msg = v
-		}
-		return actionCompleteMsg{title: "MMDF CA", text: msg}
-	}
-}
-
 func (m tuiModel) cmdInspectIP(ip string) tea.Cmd {
 	return func() tea.Msg {
 		info, err := m.app.ASNEngine.Lookup(ip)
@@ -3442,13 +3259,6 @@ func (m tuiModel) cmdInspectIP(ip string) tea.Cmd {
 		}
 		text := fmt.Sprintf("ASN:%s  Name:%s  Type:%s  CIDR:%s", info.ASN, info.Name, info.Type, info.CIDR)
 		return actionCompleteMsg{title: "IP Info", text: text}
-	}
-}
-
-func (m tuiModel) cmdStartProxy(mode string) tea.Cmd {
-	return func() tea.Msg {
-		m.app.startGoProxy(mode)
-		return actionCompleteMsg{title: "Proxy", text: "Proxy stopped"}
 	}
 }
 
@@ -3496,6 +3306,7 @@ func (m *tuiModel) setupInput(placeholder string) {
 	// reset paste confirm state when entering input
 	m.pasteConfirm = false
 	m.lastEnterTime = time.Time{} // reset Enter time tracking
+	m.pasteBuffer = ""
 	m.ti.Focus()
 }
 

@@ -14,7 +14,6 @@ import (
 	"whitedns-go/internal/bundledata"
 	"whitedns-go/internal/storage"
 
-	"github.com/atotto/clipboard"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -251,12 +250,63 @@ func (m tuiModel) handleConfigMakerScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 	k, ok := msg.(tea.KeyMsg)
 	if !ok {
 		if m.tiStep == cmStepSourceText || m.tiStep == cmStepTargetText || m.tiStep == cmStepOutputPath {
+			if m.pasteClipboardIntoInput(msg, m.tiStep == cmStepSourceText || m.tiStep == cmStepTargetText) {
+				return m, nil
+			}
 			m.ti, _ = m.ti.Update(msg)
 		}
 		return m, nil
 	}
 
+	if m.tiStep == cmStepSourceText || m.tiStep == cmStepTargetText || m.tiStep == cmStepOutputPath {
+		if m.pasteClipboardIntoInput(msg, m.tiStep == cmStepSourceText || m.tiStep == cmStepTargetText) {
+			return m, nil
+		}
+	}
+
 	s := k.String()
+	if s == "q" || s == "esc" {
+		switch m.tiStep {
+		case cmStepMain:
+			m.goBack()
+		case cmStepSourceMode:
+			m.tiStep = cmStepMain
+			m.cursor = 0
+		case cmStepSourceText, cmStepSourcePick:
+			m.tiStep = cmStepSourceMode
+			m.cursor = 0
+			m.ti.Blur()
+			m.pasteConfirm = false
+		case cmStepSourceReview:
+			m.tiStep = cmStepSourceMode
+			m.cursor = 0
+		case cmStepTargetMode:
+			m.tiStep = cmStepSourceMode
+			m.cursor = 0
+		case cmStepTargetText, cmStepTargetPick:
+			m.tiStep = cmStepTargetMode
+			m.cursor = 0
+			m.ti.Blur()
+			m.pasteConfirm = false
+		case cmStepTargetReview:
+			m.tiStep = cmStepTargetMode
+			m.cursor = 0
+		case cmStepOutputPath:
+			if m.stepData["cm_flow"] == "rewrite" {
+				m.tiStep = cmStepTargetReview
+			} else {
+				m.tiStep = cmStepSourceReview
+			}
+			m.cursor = 0
+			m.ti.Blur()
+		}
+		return m, nil
+	}
+
+	if s == "0" && m.tiStep == cmStepMain {
+		m.goBack()
+		return m, nil
+	}
 	if s == "q" || s == "esc" {
 		switch m.tiStep {
 		case cmStepMain:
@@ -413,12 +463,10 @@ func (m tuiModel) handleConfigMakerScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 			}
 			m.pasteConfirm = false
 			raw := strings.TrimSpace(m.ti.Value())
-			// Re-read from the clipboard since multi-line pastes can get
-			// mangled (newlines collapsed) inside the single-line text input.
-			if clipText, err := clipboard.ReadAll(); err == nil {
-				if clipText = strings.TrimSpace(clipText); clipText != "" {
-					raw = clipText
-				}
+			if clipText := strings.TrimSpace(m.pasteBuffer); clipText != "" {
+				raw = clipText
+			} else if clipText := readClipboardText(); clipText != "" {
+				raw = clipText
 			}
 			return m.finishConfigMakerSource(raw)
 		}
@@ -527,12 +575,10 @@ func (m tuiModel) handleConfigMakerScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 			}
 			m.pasteConfirm = false
 			raw := strings.TrimSpace(m.ti.Value())
-			// Re-read from the clipboard since multi-line pastes can get
-			// mangled (newlines collapsed) inside the single-line text input.
-			if clipText, err := clipboard.ReadAll(); err == nil {
-				if clipText = strings.TrimSpace(clipText); clipText != "" {
-					raw = clipText
-				}
+			if clipText := strings.TrimSpace(m.pasteBuffer); clipText != "" {
+				raw = clipText
+			} else if clipText := readClipboardText(); clipText != "" {
+				raw = clipText
 			}
 			return m.finishConfigMakerTarget(raw)
 		}
