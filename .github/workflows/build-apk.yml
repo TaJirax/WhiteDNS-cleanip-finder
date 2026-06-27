@@ -37,6 +37,11 @@ jobs:
       # ── 4. Android SDK (sets ANDROID_HOME in the environment) ────────────────
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # Keep the setup step lean. The action's default "tools" package can
+          # pull the Android Emulator, which is unnecessary for assembling an APK
+          # and has intermittently failed to unzip on GitHub-hosted runners.
+          packages: platform-tools
 
       # ── 5. NDK r26 ──────────────────────────────────────────────────────────
       - name: Install NDK r26
