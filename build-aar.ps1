@@ -24,6 +24,16 @@ if (-not (Get-Command gomobile -ErrorAction SilentlyContinue)) {
     Write-Error "gomobile not found on PATH. Run: go install golang.org/x/mobile/cmd/gomobile@latest; gomobile init"
 }
 
+# go.mod declares a higher 'go' directive than may be installed; pin to the
+# local toolchain so Go never tries to download a non-existent version.
+$env:GOTOOLCHAIN = "local"
+
+# Go 1.25+ requires golang.org/x/mobile to be in the module's tool graph before
+# `gomobile bind` will run. Records a tool directive in go.mod (idempotent).
+Write-Host "Ensuring gomobile tool dependency..." -ForegroundColor Cyan
+& go get -tool golang.org/x/mobile/cmd/gobind
+if ($LASTEXITCODE -ne 0) { Write-Error "go get -tool failed ($LASTEXITCODE)" }
+
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 
 Write-Host "Building whitescan.aar (arm64-v8a, armeabi-v7a, x86_64)..." -ForegroundColor Cyan
