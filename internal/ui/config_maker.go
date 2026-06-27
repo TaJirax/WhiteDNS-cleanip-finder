@@ -2,16 +2,15 @@ package ui
 
 import (
 	"fmt"
-	"net"
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
 
 	"whitedns-go/internal/bundledata"
+	"whitedns-go/internal/configmaker"
 	"whitedns-go/internal/storage"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -32,8 +31,6 @@ const (
 	cmStepTargetReview = 23
 	cmStepOutputPath   = 30
 )
-
-var configMakerURIRe = regexp.MustCompile(`(?i)(?:vless|vmess|trojan|ss|hy2|hysteria2)://[^\s]+`)
 
 func (m *tuiModel) initConfigMaker() {
 	m.tiStep = cmStepMain
@@ -974,174 +971,14 @@ func configMakerSaveTextOutput(outputPath string, lines []string, baseDir string
 	return outputPath, nil
 }
 
-func extractConfigMakerConfigs(raw string) []string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil
-	}
-	seen := make(map[string]struct{})
-	var out []string
-
-	for _, line := range strings.Split(raw, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		matches := configMakerURIRe.FindAllString(line, -1)
-		for _, match := range matches {
-			if _, ok := seen[match]; ok {
-				continue
-			}
-			seen[match] = struct{}{}
-			out = append(out, match)
-		}
-	}
-	if len(out) > 0 {
-		return out
-	}
-
-	for _, line := range strings.Split(raw, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		if _, ok := seen[line]; ok {
-			continue
-		}
-		seen[line] = struct{}{}
-		out = append(out, line)
-	}
-	return out
-}
-
-func extractConfigMakerTargets(raw string) []string {
-	seen := make(map[string]struct{})
-	var out []string
-	for _, token := range strings.FieldsFunc(raw, func(r rune) bool {
-		return r == ' ' || r == ',' || r == ';' || r == '\n' || r == '\r' || r == '\t'
-	}) {
-		token = strings.TrimSpace(token)
-		if token == "" {
-			continue
-		}
-		host, port, err := net.SplitHostPort(token)
-		if err != nil || host == "" || port == "" {
-			continue
-		}
-		if net.ParseIP(host) == nil {
-			continue
-		}
-		if _, ok := seen[token]; ok {
-			continue
-		}
-		seen[token] = struct{}{}
-		out = append(out, token)
-	}
-	sort.Strings(out)
-	return out
-}
-
-func extractConfigMakerIPs(raw string) []string {
-	seen := make(map[string]struct{})
-	var out []string
-	for _, line := range strings.Split(raw, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		if match := configMakerURIRe.FindString(line); match != "" {
-			if endpoint := configMakerHostPort(match); endpoint != "" {
-				if _, ok := seen[endpoint]; !ok {
-					seen[endpoint] = struct{}{}
-					out = append(out, endpoint)
-				}
-			}
-		}
-		for _, token := range strings.FieldsFunc(line, func(r rune) bool {
-			return r == ' ' || r == ',' || r == ';' || r == '\n' || r == '\r' || r == '\t'
-		}) {
-			token = strings.TrimSpace(token)
-			if token == "" {
-				continue
-			}
-			host, port, err := net.SplitHostPort(token)
-			if err != nil || host == "" || port == "" || net.ParseIP(host) == nil {
-				continue
-			}
-			if _, ok := seen[token]; ok {
-				continue
-			}
-			seen[token] = struct{}{}
-			out = append(out, token)
-		}
-	}
-	sort.Strings(out)
-	return out
-}
-
-func configMakerHostPort(raw string) string {
-	parsed, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || parsed.Host == "" {
-		return ""
-	}
-	host := parsed.Host
-	if strings.Contains(host, "@") {
-		parts := strings.Split(host, "@")
-		host = parts[len(parts)-1]
-	}
-	hn, port, err := net.SplitHostPort(host)
-	if err != nil || hn == "" || port == "" || net.ParseIP(hn) == nil {
-		return ""
-	}
-	return host
-}
+// These delegate to the shared internal/configmaker package so the desktop TUI
+// and the mobile bridge use one implementation.
+func extractConfigMakerConfigs(raw string) []string { return configmaker.ExtractConfigs(raw) }
+func extractConfigMakerTargets(raw string) []string { return configmaker.ExtractTargets(raw) }
+func extractConfigMakerIPs(raw string) []string     { return configmaker.ExtractIPs(raw) }
 
 func rewriteConfigMakerConfigs(configs, targets []string) []string {
-	if len(configs) == 0 || len(targets) == 0 {
-		return nil
-	}
-	// Produce one output per target (cycling through configs if there are
-	// fewer configs than targets) so every pasted target is used, and one
-	// output per config (cycling through targets) when there are more
-	// configs than targets.
-	n := len(targets)
-	if len(configs) > n {
-		n = len(configs)
-	}
-	out := make([]string, 0, n)
-	for i := 0; i < n; i++ {
-		cfg := configs[i%len(configs)]
-		target := targets[i%len(targets)]
-		out = append(out, rewriteConfigMakerConfig(cfg, target))
-	}
-	return out
-}
-
-func rewriteConfigMakerConfig(configText, target string) string {
-	configText = strings.TrimSpace(configText)
-	if configText == "" || target == "" {
-		return configText
-	}
-	if !strings.Contains(configText, "://") {
-		return configText
-	}
-	parsed, err := url.Parse(configText)
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		return configText
-	}
-	userInfo := ""
-	host := parsed.Host
-	if strings.Contains(host, "@") {
-		parts := strings.SplitN(host, "@", 2)
-		userInfo = parts[0]
-	}
-	if userInfo != "" {
-		parsed.Host = userInfo + "@" + target
-	} else {
-		parsed.Host = target
-	}
-	parsed.Fragment = target
-	return parsed.String()
+	return configmaker.RewriteConfigs(configs, targets)
 }
 
 func previewStrings(items []string, max int) []string {

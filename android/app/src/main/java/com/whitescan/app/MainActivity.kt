@@ -22,6 +22,7 @@ sealed class Screen {
     object Home : Screen()
     data class Config(val kind: ScanKind) : Screen()
     object AsnPicker : Screen()
+    object ConfigMaker : Screen()
     data class Scanning(val kind: ScanKind) : Screen()
     object Results : Screen()
 }
@@ -72,6 +73,7 @@ class MainActivity : ComponentActivity() {
                     Screen.Home -> "WhiteDNS"
                     is Screen.Config -> "${(screen as Screen.Config).kind.label()} · Config"
                     Screen.AsnPicker -> "Select ASNs"
+                    Screen.ConfigMaker -> "Config Maker"
                     is Screen.Scanning -> "${(screen as Screen.Scanning).kind.label()} · Scanning"
                     Screen.Results -> "Results"
                 }
@@ -108,13 +110,18 @@ class MainActivity : ComponentActivity() {
                             .imePadding()
                     ) {
                         when (val s = screen) {
-                            Screen.Home -> HomeScreen { kind ->
-                                vm.reset()
-                                form = FormState()
-                                pendingKind = kind
-                                screen = if (kind == ScanKind.ASN_EXPORT) Screen.AsnPicker
-                                         else Screen.Config(kind)
-                            }
+                            Screen.Home -> HomeScreen(
+                                onSelect = { kind ->
+                                    vm.reset()
+                                    form = FormState()
+                                    pendingKind = kind
+                                    screen = if (kind == ScanKind.ASN_EXPORT) Screen.AsnPicker
+                                             else Screen.Config(kind)
+                                },
+                                onConfigMaker = { screen = Screen.ConfigMaker },
+                            )
+
+                            Screen.ConfigMaker -> ConfigMakerScreen(dataDir = scanDir.absolutePath)
 
                             is Screen.Config -> ScanConfigForm(
                                 kind = s.kind,

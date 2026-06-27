@@ -70,6 +70,16 @@ func (rf *resultFile) write(line string) {
 	_, _ = fmt.Fprintln(rf.w, line)
 }
 
+// flush persists buffered results to disk without closing the file. Called after
+// each chunk so passed IPs survive even if the app is killed mid-scan.
+func (rf *resultFile) flush() {
+	if rf == nil {
+		return
+	}
+	_ = rf.w.Flush()
+	_ = rf.f.Sync()
+}
+
 func (rf *resultFile) close() string {
 	if rf == nil {
 		return ""
@@ -354,6 +364,7 @@ func StartIPScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 				}
 				foundTotal += len(results)
 			}
+			rf.flush() // persist this chunk's passed IPs immediately (survives a kill)
 			processedBase += len(chunk) * len(ports)
 		}
 

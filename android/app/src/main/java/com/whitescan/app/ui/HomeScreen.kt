@@ -18,7 +18,7 @@ import androidx.compose.ui.unit.sp
 import com.whitescan.app.ScanKind
 
 @Composable
-fun HomeScreen(onSelect: (ScanKind) -> Unit) {
+fun HomeScreen(onSelect: (ScanKind) -> Unit, onConfigMaker: () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -95,6 +95,13 @@ fun HomeScreen(onSelect: (ScanKind) -> Unit) {
             subtitle = "Search IranASNs, expand CIDRs to IP list",
             accentColor = CoralRed,
             onClick = { onSelect(ScanKind.ASN_EXPORT) },
+        )
+        ScanCard(
+            icon = Icons.Default.Build,
+            title = "Config Maker",
+            subtitle = "Rewrite proxy configs with clean IPs / extract IP:ports",
+            accentColor = CyanAccent,
+            onClick = onConfigMaker,
         )
     }
 }
