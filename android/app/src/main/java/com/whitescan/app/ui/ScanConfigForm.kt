@@ -7,6 +7,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentPaste
+import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -89,26 +90,26 @@ fun ScanConfigForm(
                     value = form.targets,
                     onValueChange = { onFormChange(form.copy(targets = it)) },
                     modifier = Modifier.weight(1f).height(110.dp),
-                    placeholder = { Text("1.2.3.0/24\n5.6.7.8\nAS12345") },
+                    placeholder = { Text("1.2.3.0/24\n5.6.7.8") },
                 )
-                Column(
-                    modifier = Modifier.align(Alignment.CenterVertically),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    FilledTonalIconButton(
-                        onClick = { paste(ctx) { text ->
-                            val sep = if (form.targets.isBlank()) text
-                                      else "${form.targets.trimEnd()}\n$text"
-                            onFormChange(form.copy(targets = sep))
-                        } },
-                        modifier = Modifier.size(48.dp),
-                    ) { Icon(Icons.Default.ContentPaste, contentDescription = "Paste targets") }
-
-                    FilledTonalButton(
-                        onClick = onPickASN,
-                        modifier = Modifier.height(40.dp),
-                    ) { Text("ASN") }
-                }
+                FilledTonalIconButton(
+                    onClick = { paste(ctx) { text ->
+                        val sep = if (form.targets.isBlank()) text
+                                  else "${form.targets.trimEnd()}\n$text"
+                        onFormChange(form.copy(targets = sep))
+                    } },
+                    modifier = Modifier.size(48.dp).align(Alignment.CenterVertically),
+                ) { Icon(Icons.Default.ContentPaste, contentDescription = "Paste targets") }
+            }
+            Spacer(Modifier.height(8.dp))
+            // Prominent full-width ASN picker button (big touch target)
+            OutlinedButton(
+                onClick = onPickASN,
+                modifier = Modifier.fillMaxWidth().height(50.dp),
+            ) {
+                Icon(Icons.Default.Dns, contentDescription = null, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Select from ASN list")
             }
         }
 

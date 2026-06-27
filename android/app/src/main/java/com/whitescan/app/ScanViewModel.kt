@@ -59,8 +59,9 @@ class ScanViewModel : ViewModel(), ScanListener {
 
         handle = when (kind) {
             ScanKind.ASN_EXPORT -> {
+                // cfg.targets already holds the expanded IPv4 CIDRs from the ASN picker.
                 viewModelScope.launch(Dispatchers.IO) {
-                    runCatching { Mobile.exportASN(dataDir, cfg.targets) }
+                    runCatching { Mobile.exportCIDRs(dataDir, cfg.targets) }
                         .onSuccess { path -> onDone(path ?: "", "") }
                         .onFailure { e -> onDone("", e.message ?: "export failed") }
                 }

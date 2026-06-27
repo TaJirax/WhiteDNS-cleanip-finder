@@ -457,6 +457,66 @@ func ExportASN(dataDir, query string) (string, error) {
 	return path, err
 }
 
+// normASN normalizes an ASN identifier for exact comparison ("AS44244" == "44244").
+func normASN(s string) string {
+	s = strings.ToUpper(strings.TrimSpace(s))
+	s = strings.TrimPrefix(s, "AS")
+	return s
+}
+
+// ExpandASNs takes newline/space/comma-separated ASN identifiers (e.g. the ones
+// the ASN picker returns) and expands each to its IPv4 CIDRs, returning them as
+// a newline-separated string suitable for use as scan Targets. IPv6 ranges are
+// skipped because the IP/SNI/proxy scanners operate on IPv4.
+func ExpandASNs(dataDir, asnIDs string) (string, error) {
+	eng := asn.NewASNEngine(dataDir)
+	if err := eng.Load(); err != nil {
+		return "", err
+	}
+	ids := splitTargets(asnIDs)
+	if len(ids) == 0 {
+		return "", fmt.Errorf("no ASNs given")
+	}
+	seen := make(map[string]bool)
+	var cidrs []string
+	for _, id := range ids {
+		groups, err := eng.SearchGroups(id)
+		if err != nil {
+			continue
+		}
+		want := normASN(id)
+		for _, g := range groups {
+			if normASN(g.ASN) != want {
+				continue // substring match for a different ASN — skip
+			}
+			for _, c := range g.CIDRs {
+				if strings.Contains(c, ":") {
+					continue // IPv6 — not scannable here
+				}
+				if !seen[c] {
+					seen[c] = true
+					cidrs = append(cidrs, c)
+				}
+			}
+		}
+	}
+	if len(cidrs) == 0 {
+		return "", fmt.Errorf("no IPv4 CIDRs found for the selected ASN(s)")
+	}
+	return strings.Join(cidrs, "\n"), nil
+}
+
+// ExportCIDRs expands the given newline/space/comma-separated CIDRs into a flat
+// IP list written under {dataDir}/asn_exports/ and returns the file path.
+func ExportCIDRs(dataDir, cidrs string) (string, error) {
+	list := splitTargets(cidrs)
+	if len(list) == 0 {
+		return "", fmt.Errorf("no CIDRs to export")
+	}
+	path, _, err := asnexport.ExportTargetsToTXT(dataDir, list, "")
+	return path, err
+}
+
 // ASNSearch returns matching ASNs as newline-separated "ASN\tName\tsubnetCount" rows.
 func ASNSearch(dataDir, query string) (string, error) {
 	eng := asn.NewASNEngine(dataDir)

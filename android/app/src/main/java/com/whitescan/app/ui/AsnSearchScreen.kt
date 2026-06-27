@@ -21,6 +21,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.whitescan.engine.mobile.Mobile
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 data class AsnRow(val asn: String, val name: String, val subnets: Int)
@@ -29,14 +30,19 @@ data class AsnRow(val asn: String, val name: String, val subnets: Int)
 @Composable
 fun AsnSearchScreen(
     dataDir: String,
-    onSelected: (targets: String) -> Unit,
+    confirmLabel: String = "Use selection",
+    // Returns the expanded IPv4 CIDRs for the chosen ASNs (ready to scan/export).
+    onSelected: (cidrs: String) -> Unit,
     onCancel: () -> Unit,
 ) {
     var query by remember { mutableStateOf("") }
     var rows by remember { mutableStateOf<List<AsnRow>>(emptyList()) }
     var loading by remember { mutableStateOf(false) }
+    var expanding by remember { mutableStateOf(false) }
+    var expandError by remember { mutableStateOf<String?>(null) }
     val selected = remember { mutableStateMapOf<String, AsnRow>() }
     val haptic = LocalHapticFeedback.current
+    val scope = rememberCoroutineScope()
 
     // Auto-focus search field so keyboard pops up immediately
     val focusRequester = remember { FocusRequester() }
@@ -96,17 +102,55 @@ fun AsnSearchScreen(
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedButton(
                             onClick = { selected.clear() },
-                            modifier = Modifier.height(40.dp),
+                            modifier = Modifier.height(44.dp),
+                            enabled = !expanding,
                         ) { Text("Clear") }
                         Button(
                             onClick = {
-                                val cidrs = selected.values.joinToString("\n") { it.asn }
-                                onSelected(cidrs)
+                                if (expanding) return@Button
+                                expandError = null
+                                val ids = selected.values.joinToString("\n") { it.asn }
+                                scope.launch {
+                                    expanding = true
+                                    val cidrs = withContext(Dispatchers.IO) {
+                                        runCatching { Mobile.expandASNs(dataDir, ids) }
+                                            .getOrElse { e ->
+                                                expandError = e.message ?: "expand failed"; ""
+                                            }
+                                    }
+                                    expanding = false
+                                    if (cidrs.isNotBlank()) onSelected(cidrs)
+                                    else if (expandError == null)
+                                        expandError = "No IPv4 ranges found for the selected ASN(s)"
+                                }
                             },
-                            modifier = Modifier.height(40.dp),
-                        ) { Text("Export") }
+                            modifier = Modifier.height(44.dp),
+                            enabled = !expanding,
+                        ) {
+                            if (expanding) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp),
+                                    strokeWidth = 2.dp,
+                                    color = MaterialTheme.colorScheme.onPrimary,
+                                )
+                            } else {
+                                Text(confirmLabel)
+                            }
+                        }
                     }
                 }
+            }
+        }
+
+        // Expansion error banner
+        expandError?.let { err ->
+            Surface(color = MaterialTheme.colorScheme.errorContainer) {
+                Text(
+                    err,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    style = MaterialTheme.typography.bodySmall,
+                )
             }
         }
 

@@ -133,6 +133,7 @@ class MainActivity : ComponentActivity() {
 
                             Screen.AsnPicker -> AsnSearchScreen(
                                 dataDir = scanDir.absolutePath,
+                                confirmLabel = if (pendingKind == ScanKind.ASN_EXPORT) "Export IPs" else "Use selection",
                                 onSelected = { targets ->
                                     form = form.copy(targets = targets)
                                     if (pendingKind == ScanKind.ASN_EXPORT) {
