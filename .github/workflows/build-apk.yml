@@ -21,10 +21,10 @@ jobs:
       # ── 1. Checkout ─────────────────────────────────────────────────────────
       - uses: actions/checkout@v4
 
-      # ── 2. Go 1.24 ──────────────────────────────────────────────────────────
+      # ── 2. Go 1.25 ──────────────────────────────────────────────────────────
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: '1.25'
           cache: true
           cache-dependency-path: go.sum
 
