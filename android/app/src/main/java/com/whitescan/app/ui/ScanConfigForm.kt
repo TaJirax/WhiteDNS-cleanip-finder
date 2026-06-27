@@ -1,11 +1,16 @@
 package com.whitescan.app.ui
 
+import android.content.ClipboardManager
+import android.content.Context
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.whitescan.app.ScanKind
 
@@ -20,20 +25,20 @@ data class FormState(
 )
 
 private val PORT_PRESETS = listOf(
-    "HTTPS only (443)"          to "443",
-    "HTTP only (80)"            to "80",
-    "Cloudflare TLS"            to "443,2053,2083,2087,2096,8443",
-    "HTTP proxy defaults"       to "80,8080,3128,8000,8888",
-    "SOCKS5 defaults"           to "1080,1081,9050,9051,10808",
-    "All common"                to "80,443,3128,8000,8080,8888,9050",
-    "Custom…"                   to "",
+    "HTTPS only (443)"      to "443",
+    "HTTP only (80)"        to "80",
+    "Cloudflare TLS"        to "443,2053,2083,2087,2096,8443",
+    "HTTP proxy defaults"   to "80,8080,3128,8000,8888",
+    "SOCKS5 defaults"       to "1080,1081,9050,9051,10808",
+    "All common"            to "80,443,3128,8000,8080,8888,9050",
+    "Custom…"               to "",
 )
 
 private val CONCURRENCY_PRESETS = listOf(
-    "Low (50)"        to "50",
-    "Medium (250)"    to "250",
-    "High (500)"      to "500",
-    "Max (1000)"      to "1000",
+    "Low (50)"     to "50",
+    "Med (250)"    to "250",
+    "High (500)"   to "500",
+    "Max (1000)"   to "1000",
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -45,6 +50,7 @@ fun ScanConfigForm(
     onStart: () -> Unit,
     onPickASN: () -> Unit,
 ) {
+    val ctx = LocalContext.current
     var showPortMenu by remember { mutableStateOf(false) }
     var portPresetLabel by remember { mutableStateOf(PORT_PRESETS[0].first) }
 
@@ -53,26 +59,49 @@ fun ScanConfigForm(
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
 
-        // — Targets —
+        // — Targets ————————————————————————————————————————————————————————
         item {
             Text("Targets (IPs / CIDRs)", style = MaterialTheme.typography.labelLarge)
             Spacer(Modifier.height(4.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.Top,
+            ) {
                 OutlinedTextField(
                     value = form.targets,
                     onValueChange = { onFormChange(form.copy(targets = it)) },
                     modifier = Modifier.weight(1f).height(110.dp),
                     placeholder = { Text("1.2.3.0/24\n5.6.7.8") },
                 )
-                // Quick-access ASN picker button
-                FilledTonalButton(
-                    onClick = onPickASN,
-                    modifier = Modifier.height(48.dp).align(Alignment.CenterVertically),
-                ) { Text("ASN") }
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.align(Alignment.CenterVertically),
+                ) {
+                    // Paste from clipboard — lets user copy IPs from browser/notes
+                    FilledTonalIconButton(
+                        onClick = {
+                            val clip = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                            val text = clip?.primaryClip?.getItemAt(0)?.coerceToText(ctx)?.toString()
+                            if (!text.isNullOrBlank()) {
+                                val appended = if (form.targets.isBlank()) text
+                                               else "${form.targets.trimEnd()}\n$text"
+                                onFormChange(form.copy(targets = appended))
+                            }
+                        },
+                        modifier = Modifier.size(48.dp),
+                    ) {
+                        Icon(Icons.Default.ContentPaste, contentDescription = "Paste from clipboard")
+                    }
+                    // ASN picker button
+                    FilledTonalButton(
+                        onClick = onPickASN,
+                        modifier = Modifier.height(40.dp),
+                    ) { Text("ASN") }
+                }
             }
         }
 
-        // — Ports —
+        // — Ports ──────────────────────────────────────────────────────────
         item {
             Text("Ports", style = MaterialTheme.typography.labelLarge)
             Spacer(Modifier.height(4.dp))
@@ -111,7 +140,7 @@ fun ScanConfigForm(
             }
         }
 
-        // — Workers + Low bandwidth —
+        // — Workers + Low bandwidth ─────────────────────────────────────────
         item {
             Text("Workers", style = MaterialTheme.typography.labelLarge)
             Spacer(Modifier.height(4.dp))
@@ -139,7 +168,7 @@ fun ScanConfigForm(
             }
         }
 
-        // — Transfer model (proxy only) —
+        // — Transfer model (proxy only) ─────────────────────────────────────
         if (kind == ScanKind.HTTP || kind == ScanKind.SOCKS5) {
             item {
                 Text("Transfer model", style = MaterialTheme.typography.labelLarge)
@@ -157,17 +186,37 @@ fun ScanConfigForm(
             }
         }
 
-        // — SNI domains + strict mode —
+        // — SNI domains + strict mode ───────────────────────────────────────
         if (kind == ScanKind.SNI) {
             item {
                 Text("SNI domains (blank = built-in defaults)", style = MaterialTheme.typography.labelLarge)
                 Spacer(Modifier.height(4.dp))
-                OutlinedTextField(
-                    value = form.sniDomains,
-                    onValueChange = { onFormChange(form.copy(sniDomains = it)) },
-                    modifier = Modifier.fillMaxWidth().height(90.dp),
-                    placeholder = { Text("workers.dev\npages.dev") },
-                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.Top,
+                ) {
+                    OutlinedTextField(
+                        value = form.sniDomains,
+                        onValueChange = { onFormChange(form.copy(sniDomains = it)) },
+                        modifier = Modifier.weight(1f).height(90.dp),
+                        placeholder = { Text("workers.dev\npages.dev") },
+                    )
+                    // Paste SNI domains from clipboard
+                    FilledTonalIconButton(
+                        onClick = {
+                            val clip = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                            val text = clip?.primaryClip?.getItemAt(0)?.coerceToText(ctx)?.toString()
+                            if (!text.isNullOrBlank()) {
+                                val appended = if (form.sniDomains.isBlank()) text
+                                               else "${form.sniDomains.trimEnd()}\n$text"
+                                onFormChange(form.copy(sniDomains = appended))
+                            }
+                        },
+                        modifier = Modifier.size(48.dp).align(Alignment.CenterVertically),
+                    ) {
+                        Icon(Icons.Default.ContentPaste, contentDescription = "Paste domains")
+                    }
+                }
             }
             item {
                 Row(
@@ -190,7 +239,7 @@ fun ScanConfigForm(
             }
         }
 
-        // — Start button —
+        // — Start button ────────────────────────────────────────────────────
         item {
             Spacer(Modifier.height(4.dp))
             Button(

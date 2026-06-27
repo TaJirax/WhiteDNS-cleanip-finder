@@ -1,6 +1,7 @@
 package com.whitescan.app.ui
 
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -12,6 +13,10 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.whitescan.engine.mobile.Mobile
@@ -20,8 +25,7 @@ import kotlinx.coroutines.withContext
 
 data class AsnRow(val asn: String, val name: String, val subnets: Int)
 
-// Searchable ASN picker — returns selected CIDRs as newline string to the
-// form. Backed by Mobile.asnSearch() which queries the embedded IranASNs CSV.
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun AsnSearchScreen(
     dataDir: String,
@@ -32,8 +36,14 @@ fun AsnSearchScreen(
     var rows by remember { mutableStateOf<List<AsnRow>>(emptyList()) }
     var loading by remember { mutableStateOf(false) }
     val selected = remember { mutableStateMapOf<String, AsnRow>() }
+    val haptic = LocalHapticFeedback.current
 
-    // Trigger search when query changes (debounce via recompose)
+    // Auto-focus search field so keyboard pops up immediately
+    val focusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        focusRequester.requestFocus()
+    }
+
     LaunchedEffect(query) {
         loading = true
         rows = withContext(Dispatchers.IO) {
@@ -53,19 +63,21 @@ fun AsnSearchScreen(
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        // Search bar
+
+        // Search bar — auto-focused so keyboard pops up on entry
         OutlinedTextField(
             value = query,
             onValueChange = { query = it },
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+                .focusRequester(focusRequester),
             placeholder = { Text("Search ASN name or number…") },
             leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
             singleLine = true,
         )
 
-        // Selection count + confirm bar
+        // Selection action bar
         if (selected.isNotEmpty()) {
             Surface(color = MaterialTheme.colorScheme.primaryContainer) {
                 Row(
@@ -76,7 +88,7 @@ fun AsnSearchScreen(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        "${selected.size} ASN(s) selected",
+                        "${selected.size} selected",
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.onPrimaryContainer,
@@ -88,7 +100,6 @@ fun AsnSearchScreen(
                         ) { Text("Clear") }
                         Button(
                             onClick = {
-                                // Return the selected ASN numbers as the targets string
                                 val cidrs = selected.values.joinToString("\n") { it.asn }
                                 onSelected(cidrs)
                             },
@@ -103,6 +114,20 @@ fun AsnSearchScreen(
             Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator()
             }
+        } else if (rows.isEmpty() && query.isNotBlank()) {
+            Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
+                Text("No results for \"$query\"", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+
+        // Hint shown when nothing selected
+        if (selected.isEmpty() && rows.isNotEmpty()) {
+            Text(
+                "Tap to select · Double-tap to deselect · Long-press to select",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+            )
         }
 
         LazyColumn(modifier = Modifier.weight(1f)) {
@@ -111,21 +136,38 @@ fun AsnSearchScreen(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable {
-                            if (isSelected) selected.remove(row.asn) else selected[row.asn] = row
-                        }
-                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                        // Tap = toggle select/deselect; long-press = select with haptic
+                        .combinedClickable(
+                            onClick = {
+                                if (isSelected) selected.remove(row.asn)
+                                else selected[row.asn] = row
+                            },
+                            onDoubleClick = {
+                                selected.remove(row.asn)
+                            },
+                            onLongClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                selected[row.asn] = row
+                            },
+                        )
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     Icon(
                         if (isSelected) Icons.Default.CheckBox else Icons.Default.CheckBoxOutlineBlank,
-                        contentDescription = null,
+                        contentDescription = if (isSelected) "Selected" else "Not selected",
                         tint = if (isSelected) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                               else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(24.dp),
                     )
                     Column(modifier = Modifier.weight(1f)) {
-                        Text(row.name, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
+                        Text(
+                            row.name,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                            maxLines = 1,
+                        )
                         Text(
                             "${row.asn}  ·  ${row.subnets} subnet(s)",
                             style = MaterialTheme.typography.bodySmall,
@@ -133,11 +175,10 @@ fun AsnSearchScreen(
                         )
                     }
                 }
-                Divider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
+                HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
             }
         }
 
-        // Cancel row at bottom
         TextButton(
             onClick = onCancel,
             modifier = Modifier
