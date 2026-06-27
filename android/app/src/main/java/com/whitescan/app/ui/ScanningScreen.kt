@@ -107,13 +107,13 @@ fun ScanningScreen(
         }
 
         // ── Live hits (last 6) ─────────────────────────────────────────────
-        if (state.displayResults.isNotEmpty()) {
+        if (state.liveResults.isNotEmpty()) {
             HorizontalDivider()
             Text(
-                "Recent hits  (${state.totalResults} total)",
+                "Recent hits  (${state.found} total)",
                 style = MaterialTheme.typography.labelMedium,
             )
-            state.displayResults.takeLast(6).forEach { line ->
+            state.liveResults.takeLast(6).forEach { line ->
                 Text(
                     "✓ $line",
                     fontSize = 11.sp,
@@ -190,7 +190,7 @@ fun ScanningScreen(
                 onClick = onViewResults,
                 modifier = Modifier.fillMaxWidth().height(52.dp),
             ) {
-                Text("View Results (${state.totalResults})")
+                Text("View Results (${state.found})")
             }
         }
     }

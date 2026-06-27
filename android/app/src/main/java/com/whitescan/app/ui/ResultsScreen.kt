@@ -9,6 +9,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -18,15 +19,22 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import com.whitescan.app.ScanUiState
+import com.whitescan.app.ScanViewModel
 import java.io.File
 
 @Composable
 fun ResultsScreen(
     state: ScanUiState,
+    vm: ScanViewModel,
     onBack: () -> Unit,
     onNewScan: () -> Unit,
 ) {
     val ctx = LocalContext.current
+
+    // Load the last 100 lines from disk once when savedPath is known.
+    LaunchedEffect(state.savedPath) {
+        state.savedPath?.let { vm.loadPreview(it) }
+    }
 
     Column(
         modifier = Modifier
@@ -35,12 +43,13 @@ fun ResultsScreen(
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
 
-        // ── Summary ────────────────────────────────────────────────────────
         Text("Results", style = MaterialTheme.typography.titleMedium)
 
         if (state.error != null) {
             Card(
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.errorContainer
+                ),
             ) {
                 Text(
                     "Error: ${state.error}",
@@ -57,7 +66,7 @@ fun ResultsScreen(
         ) {
             Column {
                 Text(
-                    "${state.totalResults} endpoint(s) found",
+                    "${state.found} endpoint(s) found",
                     style = MaterialTheme.typography.bodyLarge,
                 )
                 state.savedPath?.let { path ->
@@ -73,11 +82,8 @@ fun ResultsScreen(
                     onClick = { shareFile(ctx, path) },
                     modifier = Modifier.height(40.dp),
                 ) {
-                    Icon(
-                        Icons.Default.Share,
-                        contentDescription = "Share",
-                        modifier = Modifier.size(16.dp),
-                    )
+                    Icon(Icons.Default.Share, contentDescription = "Share",
+                        modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(4.dp))
                     Text("Share")
                 }
@@ -86,32 +92,46 @@ fun ResultsScreen(
 
         HorizontalDivider()
 
-        // ── Result list — only shows last 100 from RAM ─────────────────────
-        if (state.totalResults > state.displayResults.size) {
-            Text(
-                "Showing last ${state.displayResults.size} of ${state.totalResults} — full list saved to file",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-
-        LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
-            items(state.displayResults) { line ->
+        // Preview: last 100 lines loaded from disk (no RAM accumulation).
+        when {
+            state.previewLoading -> {
+                Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(modifier = Modifier.padding(24.dp))
+                }
+            }
+            state.preview.isEmpty() && state.savedPath != null -> {
                 Text(
-                    line,
-                    fontSize = 12.sp,
-                    fontFamily = FontFamily.Monospace,
-                    color = Color(0xFF4CAF50),
-                    modifier = Modifier.padding(vertical = 3.dp),
+                    "No results saved.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                HorizontalDivider(
-                    thickness = 0.5.dp,
-                    color = MaterialTheme.colorScheme.outlineVariant,
-                )
+            }
+            else -> {
+                if (state.found > state.preview.size) {
+                    Text(
+                        "Showing last ${state.preview.size} of ${state.found} — full list in file",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                    items(state.preview) { line ->
+                        Text(
+                            line,
+                            fontSize = 12.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = Color(0xFF4CAF50),
+                            modifier = Modifier.padding(vertical = 3.dp),
+                        )
+                        HorizontalDivider(
+                            thickness = 0.5.dp,
+                            color = MaterialTheme.colorScheme.outlineVariant,
+                        )
+                    }
+                }
             }
         }
 
-        // ── Bottom buttons ─────────────────────────────────────────────────
         Row(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier.fillMaxWidth(),

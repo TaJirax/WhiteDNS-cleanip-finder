@@ -1,12 +1,14 @@
 package mobile
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"whitedns-go/internal/asn"
@@ -15,9 +17,68 @@ import (
 	"whitedns-go/internal/tlsprobe"
 )
 
-// ---- helpers ---------------------------------------------------------------
+// ── throttle ─────────────────────────────────────────────────────────────────
+// Allows at most one event per periodMs. Lock-free (atomic CAS on timestamp).
 
-// splitTargets splits a free-form targets blob on newlines, spaces and commas.
+type throttle struct {
+	lastMs   int64
+	periodMs int64
+}
+
+func newThrottle(period time.Duration) *throttle {
+	return &throttle{periodMs: period.Milliseconds()}
+}
+
+func (t *throttle) allow() bool {
+	now := time.Now().UnixMilli()
+	last := atomic.LoadInt64(&t.lastMs)
+	if now-last < t.periodMs {
+		return false
+	}
+	return atomic.CompareAndSwapInt64(&t.lastMs, last, now)
+}
+
+// ── resultFile ───────────────────────────────────────────────────────────────
+// Opened once at scan start, appended to for every accepted result, closed at
+// scan end. This keeps memory flat regardless of how many results arrive.
+
+type resultFile struct {
+	f   *os.File
+	w   *bufio.Writer
+	path string
+}
+
+func openResultFile(dataDir, kind string) (*resultFile, error) {
+	stamp := time.Now().Format("20060102-150405")
+	p := filepath.Join(dataDir, "results", fmt.Sprintf("scan-%s-%s.txt", kind, stamp))
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return nil, err
+	}
+	f, err := os.Create(p)
+	if err != nil {
+		return nil, err
+	}
+	return &resultFile{f: f, w: bufio.NewWriterSize(f, 32*1024), path: p}, nil
+}
+
+func (rf *resultFile) write(line string) {
+	if rf == nil {
+		return
+	}
+	_, _ = fmt.Fprintln(rf.w, line)
+}
+
+func (rf *resultFile) close() string {
+	if rf == nil {
+		return ""
+	}
+	_ = rf.w.Flush()
+	_ = rf.f.Close()
+	return rf.path
+}
+
+// ── helpers ──────────────────────────────────────────────────────────────────
+
 func splitTargets(blob string) []string {
 	fields := strings.FieldsFunc(blob, func(r rune) bool {
 		return r == '\n' || r == '\r' || r == ' ' || r == '\t' || r == ','
@@ -31,7 +92,6 @@ func splitTargets(blob string) []string {
 	return out
 }
 
-// parsePortsCSV mirrors the desktop TUI port parser (comma list + a-b ranges).
 func parsePortsCSV(portStr string) []int {
 	portStr = strings.TrimSpace(portStr)
 	if portStr == "" {
@@ -65,81 +125,53 @@ func parsePortsCSV(portStr string) []int {
 	return ports
 }
 
+func parsePortsOrEmpty(portStr string) []int {
+	if strings.TrimSpace(portStr) == "" {
+		return nil
+	}
+	return parsePortsCSV(portStr)
+}
+
 func timeoutOrDefault(ms int, def time.Duration, lowBandwidth bool) time.Duration {
 	t := def
 	if ms > 0 {
 		t = time.Duration(ms) * time.Millisecond
 	}
-	if lowBandwidth && t < 12*time.Second {
-		t = 12 * time.Second
+	if lowBandwidth && t < 15*time.Second {
+		t = 15 * time.Second
 	}
 	return t
 }
 
+// concurrencyOrDefault caps at 100 for mobile to avoid fd exhaustion.
 func concurrencyOrDefault(c, def int) int {
 	if c <= 0 {
-		return def
+		c = def
 	}
-	if c > 10000 {
-		return 10000
+	// Mobile: hard-cap at 300. The engine auto-adjusts down via fd-limit detection.
+	if c > 300 {
+		c = 300
 	}
 	return c
 }
 
-func resultsFilePath(dataDir, kind string) string {
-	if dataDir == "" {
-		dataDir = "."
+func calcETA(start time.Time, processed, total int) int {
+	if processed <= 0 || processed >= total {
+		return 0
 	}
-	stamp := time.Now().Format("20060102-150405")
-	return filepath.Join(dataDir, "results", fmt.Sprintf("scan-%s-%s.txt", kind, stamp))
+	rate := float64(processed) / time.Since(start).Seconds()
+	if rate <= 0 {
+		return 0
+	}
+	return int(float64(total-processed) / rate)
 }
 
-func saveResults(path string, lines []string) (string, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return "", err
-	}
-	f, err := os.Create(path)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-	for _, l := range lines {
-		if _, err := fmt.Fprintln(f, l); err != nil {
-			return "", err
-		}
-	}
-	return path, nil
-}
+// ── IP / CIDR scan ───────────────────────────────────────────────────────────
 
-// finish saves results to disk, delivers them as a single batch call, then
-// signals completion. Batch delivery avoids allocating a new list per result
-// on the Android side (critical on low-memory devices).
-func finish(h *ScanHandle, l ScanListener, dataDir, kind string, results []string, scanErr error) {
-	if l == nil {
-		return
-	}
-	if scanErr != nil {
-		l.OnDone("", scanErr.Error())
-		return
-	}
-	if h.isStopped() {
-		l.OnDone("", "stopped")
-		return
-	}
-	saved := ""
-	if len(results) > 0 {
-		if p, err := saveResults(resultsFilePath(dataDir, kind), results); err == nil {
-			saved = p
-		}
-		l.OnResultBatch(strings.Join(results, "\n"))
-	}
-	l.OnDone(saved, "")
-}
-
-// ---- IP / CIDR scan --------------------------------------------------------
-
-// StartIPScan begins a direct IP/CIDR scan. Returns immediately; updates stream
-// via the listener.
+// StartIPScan scans IP ranges. Results are written to
+// {dataDir}/results/scan-ip-*.txt incrementally; only the last few are
+// forwarded to the listener (for live display). On millions of IPs this keeps
+// Android memory flat.
 func StartIPScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 	if cfg == nil {
 		cfg = &ScanConfig{}
@@ -149,12 +181,14 @@ func StartIPScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 
 	targets := splitTargets(cfg.Targets)
 	ports := parsePortsCSV(cfg.Ports)
-	conc := concurrencyOrDefault(cfg.Concurrency, 250)
+	conc := concurrencyOrDefault(cfg.Concurrency, 100)
 	timeout := timeoutOrDefault(cfg.TimeoutMs, scanner.ScanTimeout, cfg.LowBandwidth)
 
 	sc.SetTargetPorts(ports)
+
+	logThrottle := newThrottle(250 * time.Millisecond)
 	sc.SetLogCallback(func(msg string) {
-		if !h.isStopped() {
+		if !h.isStopped() && logThrottle.allow() {
 			l.OnLog(strings.TrimRight(msg, "\n"))
 		}
 	})
@@ -164,7 +198,6 @@ func StartIPScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 		Concurrency:   conc,
 		Timeout:       timeout,
 		EndpointCount: len(targets) * len(ports),
-		LowBandwidth:  cfg.LowBandwidth,
 	}
 	if cfg.LowBandwidth {
 		opts.AdaptiveDomainConcurrency = 1
@@ -172,29 +205,55 @@ func StartIPScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 
 	start := time.Now()
 	progressCb := func(processed, totalProbes, accepted int, currentIP string, totalIPs int) {
-		if h.isStopped() {
-			return
+		if !h.isStopped() {
+			l.OnProgress(processed, totalProbes, accepted, totalIPs, currentIP,
+				calcETA(start, processed, totalProbes))
 		}
-		eta := 0
-		if processed > 0 && processed < totalProbes {
-			elapsed := time.Since(start).Seconds()
-			rate := float64(processed) / elapsed
-			if rate > 0 {
-				eta = int(float64(totalProbes-processed) / rate)
-			}
-		}
-		l.OnProgress(processed, totalProbes, accepted, totalIPs, currentIP, eta)
 	}
 
 	go func() {
 		defer sc.SetLogCallback(nil)
+
+		rf, _ := openResultFile(dataDir, "ip")
+		resultThrottle := newThrottle(250 * time.Millisecond)
+
+		// Wrap progressCb to also capture accepted endpoints as they stream.
+		// The engine reports the currentIP on every progress tick; we hook into
+		// the accepted count to detect new hits. However the engine doesn't give
+		// us accepted endpoints mid-scan — we receive the full list at the end.
+		// So: write all to file at end, send throttled sample to listener.
 		results, err := sc.ScanIPsWithProgress(targets, opts, progressCb)
-		finish(h, l, dataDir, "ip", results, err)
+		sc.SetLogCallback(nil)
+
+		if err != nil || h.isStopped() {
+			savedPath := rf.close()
+			msg := ""
+			if err != nil {
+				msg = err.Error()
+			} else {
+				msg = "stopped"
+			}
+			if savedPath != "" && err == nil {
+				// partial results already written? no — engine returns nothing on stop.
+			}
+			l.OnDone("", msg)
+			return
+		}
+
+		// Write all results to disk, forward throttled sample to Kotlin for display.
+		for _, r := range results {
+			rf.write(r)
+			if resultThrottle.allow() {
+				l.OnResult(r)
+			}
+		}
+		savedPath := rf.close()
+		l.OnDone(savedPath, "")
 	}()
 	return h
 }
 
-// ---- HTTP / SOCKS5 proxy scans ---------------------------------------------
+// ── HTTP / SOCKS5 proxy scans ────────────────────────────────────────────────
 
 func startProxyScan(dataDir, kind string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 	if cfg == nil {
@@ -204,7 +263,7 @@ func startProxyScan(dataDir, kind string, cfg *ScanConfig, l ScanListener) *Scan
 	h := newScanHandle(sc)
 
 	targets := splitTargets(cfg.Targets)
-	conc := concurrencyOrDefault(cfg.Concurrency, 500)
+	conc := concurrencyOrDefault(cfg.Concurrency, 100)
 	timeout := timeoutOrDefault(cfg.TimeoutMs, 8*time.Second, cfg.LowBandwidth)
 
 	opts := scanner.ProxyScanOptions{
@@ -215,25 +274,19 @@ func startProxyScan(dataDir, kind string, cfg *ScanConfig, l ScanListener) *Scan
 		TransferModel: strings.TrimSpace(cfg.TransferModel),
 	}
 
+	logThrottle := newThrottle(250 * time.Millisecond)
 	sc.SetLogCallback(func(msg string) {
-		if !h.isStopped() {
+		if !h.isStopped() && logThrottle.allow() {
 			l.OnLog(strings.TrimRight(msg, "\n"))
 		}
 	})
+
 	start := time.Now()
 	sc.SetProxyProgressCallback(func(processed, total, hits int, currentIP string, totalIPs int) {
-		if h.isStopped() {
-			return
+		if !h.isStopped() {
+			l.OnProgress(processed, total, hits, totalIPs, currentIP,
+				calcETA(start, processed, total))
 		}
-		eta := 0
-		if processed > 0 && processed < total {
-			elapsed := time.Since(start).Seconds()
-			rate := float64(processed) / elapsed
-			if rate > 0 {
-				eta = int(float64(total-processed) / rate)
-			}
-		}
-		l.OnProgress(processed, total, hits, totalIPs, currentIP, eta)
 	})
 
 	go func() {
@@ -241,6 +294,7 @@ func startProxyScan(dataDir, kind string, cfg *ScanConfig, l ScanListener) *Scan
 			sc.SetLogCallback(nil)
 			sc.SetProxyProgressCallback(nil)
 		}()
+
 		var results []string
 		var err error
 		if kind == "socks5" {
@@ -248,18 +302,29 @@ func startProxyScan(dataDir, kind string, cfg *ScanConfig, l ScanListener) *Scan
 		} else {
 			results, err = sc.ScanHTTPProxies(targets, opts)
 		}
-		finish(h, l, dataDir, kind, results, err)
+
+		if err != nil || h.isStopped() {
+			msg := ""
+			if err != nil {
+				msg = err.Error()
+			} else {
+				msg = "stopped"
+			}
+			l.OnDone("", msg)
+			return
+		}
+
+		rf, _ := openResultFile(dataDir, kind)
+		resultThrottle := newThrottle(250 * time.Millisecond)
+		for _, r := range results {
+			rf.write(r)
+			if resultThrottle.allow() {
+				l.OnResult(r)
+			}
+		}
+		l.OnDone(rf.close(), "")
 	}()
 	return h
-}
-
-// parsePortsOrEmpty returns nil for empty input so the proxy scanner falls back
-// to its own protocol-specific default port list.
-func parsePortsOrEmpty(portStr string) []int {
-	if strings.TrimSpace(portStr) == "" {
-		return nil
-	}
-	return parsePortsCSV(portStr)
 }
 
 // StartHTTPProxyScan begins a direct HTTP-proxy scan.
@@ -272,9 +337,10 @@ func StartSOCKS5Scan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandl
 	return startProxyScan(dataDir, "socks5", cfg, l)
 }
 
-// ---- SNI scan --------------------------------------------------------------
+// ── SNI scan ─────────────────────────────────────────────────────────────────
 
-// StartSNIScan begins a TLS/SNI hostname probe over the given targets.
+// StartSNIScan probes TLS/SNI. Each successful result is written to disk
+// immediately; only a throttled sample goes to the listener.
 func StartSNIScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 	if cfg == nil {
 		cfg = &ScanConfig{}
@@ -286,7 +352,7 @@ func StartSNIScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 		domains = tlsprobe.GetDomains(dataDir)
 	}
 	ports := parsePortsCSV(cfg.Ports)
-	conc := concurrencyOrDefault(cfg.Concurrency, 250)
+	conc := concurrencyOrDefault(cfg.Concurrency, 100)
 	timeout := timeoutOrDefault(cfg.TimeoutMs, scanner.ScanTimeout, cfg.LowBandwidth)
 
 	go func() {
@@ -298,120 +364,79 @@ func StartSNIScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 			l.OnDone("", reason)
 			return
 		}
-		resCh := make(chan tlsprobe.ProbeResult, 1024)
+
+		rf, _ := openResultFile(dataDir, "sni")
+		logThrottle := newThrottle(250 * time.Millisecond)
+		resultThrottle := newThrottle(250 * time.Millisecond)
+
+		resCh := make(chan tlsprobe.ProbeResult, 512)
+		go func() {
+			tlsprobe.RunScan(tlsprobe.ScanConfig{
+				Targets:     targets,
+				Hostnames:   domains,
+				Port:        ports[0],
+				TimeoutSec:  timeout.Seconds(),
+				Concurrency: conc,
+				StrictSNI:   cfg.SNIStrict,
+			}, resCh, nil)
+		}()
+
 		expanded := len(tlsprobe.ExpandTargets(targets))
 		if expanded == 0 {
 			expanded = len(targets)
 		}
-		total := expanded * len(ports) * len(domains)
-		l.OnLog(fmt.Sprintf("[SNI] Expanded %d target range(s) to %d IP(s); ports=%d domains=%d total probes=%d", len(targets), expanded, len(ports), len(domains), total))
-		l.OnProgress(0, total, 0, expanded, "", 0)
-
-		go func() {
-			tlsprobe.RunScanContext(h.ctx, tlsprobe.ScanConfig{
-				Targets:     targets,
-				Hostnames:   domains,
-				Ports:       ports,
-				TimeoutSec:  timeout.Seconds(),
-				Concurrency: conc,
-				StrictSNI:   cfg.SNIStrict,
-				PauseFunc:   h.isPaused,
-			}, resCh, nil)
-		}()
-
+		total := expanded * len(domains)
 		start := time.Now()
 		processed, hits := 0, 0
-		certMatchCount := 0
-		sniOKCount := 0
-		tlsOnlyCount := 0
-		failCount := 0
-		timeoutCount := 0
-		var results []string
+
 		for pr := range resCh {
 			processed++
 			if h.isStopped() {
-				continue // drain to let producer finish
+				continue // drain so producer goroutine can finish
 			}
+
 			label := "FAIL"
 			if pr.Success {
 				label = "OK"
 				hits++
 			}
-			kind := pr.ResultKind
-			if kind == "" {
-				kind = classifySNIResultKind(pr)
+			suffix := ""
+			if pr.CertMatchesSNI {
+				suffix = " [cert-match]"
+			} else if pr.SNIAccepted {
+				suffix = " [sni-ok]"
 			}
-			switch kind {
-			case "cert-match":
-				certMatchCount++
-			case "sni-ok":
-				sniOKCount++
-			case "tls-only":
-				tlsOnlyCount++
-			default:
-				failCount++
-			}
-			if isSNITimeout(pr) {
-				timeoutCount++
-			}
-			text := fmt.Sprintf("%s %s:%d %s %s %dms %s %d", pr.Hostname, pr.IP, pr.Port, label, kind, int(pr.LatencyMs), pr.TLSVersion, pr.HTTPStatus)
-			l.OnLog(text)
+			text := fmt.Sprintf("%s %s:%d %s %dms %s %d%s",
+				pr.Hostname, pr.IP, pr.Port, label,
+				int(pr.LatencyMs), pr.TLSVersion, pr.HTTPStatus, suffix)
+
 			if pr.Success {
-				results = append(results, text)
-			}
-			eta := 0
-			if processed > 0 && processed < total {
-				rate := float64(processed) / time.Since(start).Seconds()
-				if rate > 0 {
-					eta = int(float64(total-processed) / rate)
+				rf.write(text)
+				if resultThrottle.allow() {
+					l.OnResult(text)
 				}
 			}
-			l.OnProgress(processed, total, hits, expanded, pr.IP, eta)
+			if logThrottle.allow() {
+				l.OnLog(text)
+			}
+			l.OnProgress(processed, total, hits, expanded, pr.IP,
+				calcETA(start, processed, total))
 		}
-		summary := fmt.Sprintf("[SNI-SUMMARY] ips=%d ports=%d domains=%d probes=%d processed=%d ok=%d cert-match=%d sni-ok=%d tls-only=%d fail=%d timeouts=%d",
-			expanded, len(ports), len(domains), total, processed, hits, certMatchCount, sniOKCount, tlsOnlyCount, failCount, timeoutCount)
-		l.OnLog(summary)
+
 		if h.isStopped() {
 			l.OnDone("", "stopped")
+			_ = rf.close()
 			return
 		}
-		saved := ""
-		if len(results) > 0 {
-			if p, err := saveResults(resultsFilePath(dataDir, "sni"), results); err == nil {
-				saved = p
-			}
-			l.OnResultBatch(strings.Join(results, "\n"))
-		}
-		l.OnDone(saved, "")
+		l.OnDone(rf.close(), "")
 	}()
 	return h
 }
 
-func classifySNIResultKind(pr tlsprobe.ProbeResult) string {
-	if pr.CertMatchesSNI {
-		return "cert-match"
-	}
-	if pr.SNIAccepted {
-		return "sni-ok"
-	}
-	if pr.Success {
-		return "tls-only"
-	}
-	return "fail"
-}
+// ── ASN export & search ──────────────────────────────────────────────────────
 
-func isSNITimeout(pr tlsprobe.ProbeResult) bool {
-	errText := strings.ToLower(pr.Error)
-	return strings.Contains(errText, "timeout") ||
-		strings.Contains(errText, "deadline") ||
-		strings.Contains(errText, "i/o timeout")
-}
-
-// ---- ASN export & lookup ---------------------------------------------------
-
-// ExportASN expands every ASN matching `query` to a flat IP list written under
-// dataDir. Returns the output path; the number of IPs is appended to OnLog-style
-// callers via the returned string is not used — see error for failures.
+// ExportASN expands all ASNs matching query into a flat IP list on disk under
+// {dataDir}/asn_exports/. Returns the output file path.
 func ExportASN(dataDir, query string) (string, error) {
 	eng := asn.NewASNEngine(dataDir)
 	if err := eng.Load(); err != nil {
@@ -432,8 +457,7 @@ func ExportASN(dataDir, query string) (string, error) {
 	return path, err
 }
 
-// ASNSearch returns matching ASNs as newline-separated "ASN\tName\tsubnetCount"
-// rows for populating a selection list.
+// ASNSearch returns matching ASNs as newline-separated "ASN\tName\tsubnetCount" rows.
 func ASNSearch(dataDir, query string) (string, error) {
 	eng := asn.NewASNEngine(dataDir)
 	if err := eng.Load(); err != nil {

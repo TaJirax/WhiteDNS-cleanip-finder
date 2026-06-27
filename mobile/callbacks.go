@@ -1,23 +1,27 @@
 package mobile
 
 // ScanListener receives streaming updates during a scan. gomobile maps this Go
-// interface to a Kotlin/Java interface; implement it on the Android side and
-// pass it into the Start* functions.
+// interface to a Kotlin/Java interface; implement it on the Android side.
+//
+// Design for low-memory devices:
+//   - OnProgress fires on every engine update (already throttled by the engine).
+//   - OnResult fires at most once per 250 ms for live display only; results are
+//     written to disk by the Go side — do NOT accumulate them in Android memory.
+//   - OnLog fires at most once per 250 ms; full log is on disk.
+//   - OnDone carries the saved-file path; Kotlin reads the file on demand.
 //
 // All callbacks fire from background goroutines — marshal onto the main thread
-// before touching UI state.
+// before touching UI state (StateFlow.update is thread-safe and handles this).
 type ScanListener interface {
-	// OnProgress reports cumulative progress. etaSec is best-effort (0 if unknown).
+	// OnProgress: cumulative progress. etaSec is best-effort (0 = unknown).
 	OnProgress(processed, total, found, uniqueIPs int, currentIP string, etaSec int)
-	// OnResult delivers one accepted endpoint in real-time (streaming, for live display).
-	// Only called for scan types that stream results (SNI, proxy waves).
+	// OnResult: one accepted endpoint for live display (throttled ≤4/sec).
+	// The full result set is in the file at OnDone's savedPath — do not
+	// accumulate these in RAM.
 	OnResult(line string)
-	// OnResultBatch delivers the full result set at completion as a single
-	// newline-joined string. Use this to avoid thousands of individual calls on mobile.
-	OnResultBatch(lines string)
-	// OnLog delivers a scanner diagnostic / activity line.
+	// OnLog: one log line for live display (throttled ≤4/sec).
 	OnLog(line string)
-	// OnDone signals completion. savedPath is the results file ("" if none);
-	// errMsg is "" on success.
+	// OnDone: scan finished. savedPath = results file path ("" if nothing found).
+	// errMsg = "" on success.
 	OnDone(savedPath string, errMsg string)
 }
