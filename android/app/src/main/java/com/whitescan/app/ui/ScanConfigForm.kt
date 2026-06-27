@@ -20,7 +20,7 @@ import com.whitescan.app.ScanKind
 data class FormState(
     val targets: String = "",
     val ports: String = "",
-    val concurrency: String = "250",
+    val concurrency: String = "50",   // phone-safe default
     val lowBandwidth: Boolean = false,
     val transferModel: String = "old",
     val sniDomains: String = "",
@@ -50,16 +50,15 @@ private val PORT_PRESETS = listOf(
     "Custom…"                               to "",
 )
 
-// 7 concurrency presets matching the TUI concurrencyOptions
+// Android-safe worker modes. High fanout on a phone saturates the radio and
+// disconnects the device, so the modes are tuned down. "Ultra-light" and
+// "Gentle" also probe fewer domains per IP (handled in the Go bridge).
 private data class ConcurrencyPreset(val label: String, val value: String, val lowBw: Boolean = false)
 private val CONCURRENCY_PRESETS = listOf(
-    ConcurrencyPreset("Low-BW (50)",  "50",   lowBw = true),
-    ConcurrencyPreset("Low (50)",     "50"),
-    ConcurrencyPreset("Med (250)",    "250"),
-    ConcurrencyPreset("High (500)",   "500"),
-    ConcurrencyPreset("V.High (1000)","1000"),
-    ConcurrencyPreset("Max (2000)",   "2000"),
-    ConcurrencyPreset("Extreme (5000)","5000"),
+    ConcurrencyPreset("Ultra-light (10)", "10", lowBw = true),
+    ConcurrencyPreset("Gentle (25)",      "25", lowBw = true),
+    ConcurrencyPreset("Safe (50)",        "50"),
+    ConcurrencyPreset("Fast (100)",       "100"),
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -102,10 +101,14 @@ fun ScanConfigForm(
                 ) { Icon(Icons.Default.ContentPaste, contentDescription = "Paste targets") }
             }
             Spacer(Modifier.height(8.dp))
-            // Prominent full-width ASN picker button (big touch target)
-            OutlinedButton(
+            // Prominent full-width ASN picker button (big touch target), purple
+            Button(
                 onClick = onPickASN,
                 modifier = Modifier.fillMaxWidth().height(50.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Lavender,
+                    contentColor = androidx.compose.ui.graphics.Color(0xFF1A0050),
+                ),
             ) {
                 Icon(Icons.Default.Dns, contentDescription = null, modifier = Modifier.size(20.dp))
                 Spacer(Modifier.width(8.dp))
@@ -151,16 +154,16 @@ fun ScanConfigForm(
         item {
             SectionLabel("Workers")
             Spacer(Modifier.height(4.dp))
-            // Two rows of chips — matches TUI's 7 concurrency options
+            // Android-safe worker modes (2 per row to fit phone width)
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                CONCURRENCY_PRESETS.take(4).forEach { preset ->
+                CONCURRENCY_PRESETS.take(2).forEach { preset ->
                     ConcurrencyChip(preset, form, showCustomConcurrency,
                         onPick = { showCustomConcurrency = false; onFormChange(it) })
                 }
             }
             Spacer(Modifier.height(4.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                CONCURRENCY_PRESETS.drop(4).forEach { preset ->
+                CONCURRENCY_PRESETS.drop(2).forEach { preset ->
                     ConcurrencyChip(preset, form, showCustomConcurrency,
                         onPick = { showCustomConcurrency = false; onFormChange(it) })
                 }

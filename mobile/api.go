@@ -143,16 +143,43 @@ func timeoutOrDefault(ms int, def time.Duration, lowBandwidth bool) time.Duratio
 	return t
 }
 
-// concurrencyOrDefault caps at 100 for mobile to avoid fd exhaustion.
+// concurrencyOrDefault keeps worker counts phone-safe. High fanout on a phone
+// saturates the radio/fd table and disconnects the device, so we hard-cap well
+// below desktop values.
 func concurrencyOrDefault(c, def int) int {
 	if c <= 0 {
 		c = def
 	}
-	// Mobile: hard-cap at 300. The engine auto-adjusts down via fd-limit detection.
-	if c > 300 {
-		c = 300
+	// Mobile hard cap: 100 workers. Even this is high for a weak device; the
+	// recommended modes are 10/25/50.
+	if c > 100 {
+		c = 100
+	}
+	if c < 1 {
+		c = 1
 	}
 	return c
+}
+
+// Mobile memory guards — bound RAM so CDN-sized ranges (e.g. Cloudflare) can't
+// OOM-crash a phone. The scan runs on the capped subset (slow but stable).
+const (
+	mobileMaxIPs       = 200000 // cap unique IPs expanded from CIDRs
+	mobileMaxEndpoints = 400000 // cap total ip:port endpoints (memory + goroutines)
+)
+
+// gentleProbeDomains returns a reduced probe-domain list for low-concurrency
+// "gentle" modes (≤25 workers). Fewer probes per endpoint = far less bandwidth,
+// which keeps the user's connection alive on weak links.
+func gentleProbeDomains(conc int) []string {
+	switch {
+	case conc <= 10:
+		return []string{"workers.dev"}
+	case conc <= 25:
+		return []string{"workers.dev", "pages.dev", "chatgpt.com"}
+	default:
+		return nil // nil -> engine uses its full default list
+	}
 }
 
 func calcETA(start time.Time, processed, total int) int {
@@ -181,7 +208,7 @@ func StartIPScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 
 	targets := splitTargets(cfg.Targets)
 	ports := parsePortsCSV(cfg.Ports)
-	conc := concurrencyOrDefault(cfg.Concurrency, 100)
+	conc := concurrencyOrDefault(cfg.Concurrency, 50) // phone default: 50 workers
 	timeout := timeoutOrDefault(cfg.TimeoutMs, scanner.ScanTimeout, cfg.LowBandwidth)
 
 	sc.SetTargetPorts(ports)
@@ -198,6 +225,18 @@ func StartIPScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 		Concurrency:   conc,
 		Timeout:       timeout,
 		EndpointCount: len(targets) * len(ports),
+		// Android safety: never let the engine auto-raise to 2000 workers, and
+		// bound memory so CDN-sized ranges can't OOM the device.
+		DisableAutoConcurrency: true,
+		MaxIPs:                 mobileMaxIPs,
+		MaxEndpoints:           mobileMaxEndpoints,
+	}
+	// Gentle modes (≤25 workers): probe fewer domains per endpoint to keep the
+	// user's connection alive on weak links. Also pin per-endpoint parallelism low.
+	if gentle := gentleProbeDomains(conc); gentle != nil {
+		opts.ProbeDomainsHTTP = gentle
+		opts.ProbeDomainsHTTPS = gentle
+		opts.AdaptiveDomainConcurrency = 1
 	}
 	if cfg.LowBandwidth {
 		opts.AdaptiveDomainConcurrency = 1
@@ -263,7 +302,7 @@ func startProxyScan(dataDir, kind string, cfg *ScanConfig, l ScanListener) *Scan
 	h := newScanHandle(sc)
 
 	targets := splitTargets(cfg.Targets)
-	conc := concurrencyOrDefault(cfg.Concurrency, 100)
+	conc := concurrencyOrDefault(cfg.Concurrency, 50)
 	timeout := timeoutOrDefault(cfg.TimeoutMs, 8*time.Second, cfg.LowBandwidth)
 
 	opts := scanner.ProxyScanOptions{
@@ -352,7 +391,7 @@ func StartSNIScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 		domains = tlsprobe.GetDomains(dataDir)
 	}
 	ports := parsePortsCSV(cfg.Ports)
-	conc := concurrencyOrDefault(cfg.Concurrency, 100)
+	conc := concurrencyOrDefault(cfg.Concurrency, 50)
 	timeout := timeoutOrDefault(cfg.TimeoutMs, scanner.ScanTimeout, cfg.LowBandwidth)
 
 	go func() {

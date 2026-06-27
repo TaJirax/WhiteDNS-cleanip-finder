@@ -180,6 +180,16 @@ type IPScanOptions struct {
 	AdaptiveDomainConcurrency int // Set by pipeline based on scan conditions (default 4, up to 6)
 	LowBandwidth              bool
 	Method                    string
+	// MaxIPs caps the number of unique IPs expanded from CIDRs (0 = unlimited).
+	// Used by the mobile bridge to keep memory bounded on huge ranges (e.g. CDNs).
+	MaxIPs int
+	// MaxEndpoints caps the total ip:port endpoints built (0 = unlimited). Bounds
+	// both memory and goroutine count so low-RAM devices don't OOM.
+	MaxEndpoints int
+	// DisableAutoConcurrency prevents the engine from auto-raising Concurrency to
+	// 2000 on large scans. Mobile sets this so it never saturates a phone's
+	// bandwidth / fd table (which disconnects the device and yields zero results).
+	DisableAutoConcurrency bool
 }
 
 type deadIPState struct {
@@ -452,6 +462,13 @@ func (s *Scanner) ScanIPsWithCIDR(cidrs []string, opts IPScanOptions) ([]string,
 				ipSet[ip] = true
 			}
 		}
+		// Mobile/low-RAM guard: stop expanding once the IP cap is hit so huge
+		// CDN ranges can't OOM the device. The scan proceeds on the capped set.
+		if opts.MaxIPs > 0 && len(allIPs) >= opts.MaxIPs {
+			allIPs = allIPs[:opts.MaxIPs]
+			s.logf("[DEBUG] reached MaxIPs cap (%d); scanning a subset\n", opts.MaxIPs)
+			break
+		}
 	}
 
 	if len(allIPs) == 0 && len(fixedEndpoints) == 0 {
@@ -545,6 +562,13 @@ func (s *Scanner) ScanIPsWithProgress(cidrs []string, opts IPScanOptions, progre
 				ipSet[ip] = true
 			}
 		}
+		// Mobile/low-RAM guard: stop expanding once the IP cap is hit so huge
+		// CDN ranges can't OOM the device. The scan proceeds on the capped set.
+		if opts.MaxIPs > 0 && len(allIPs) >= opts.MaxIPs {
+			allIPs = allIPs[:opts.MaxIPs]
+			s.logf("[DEBUG] reached MaxIPs cap (%d); scanning a subset\n", opts.MaxIPs)
+			break
+		}
 	}
 
 	if len(allIPs) == 0 && len(fixedEndpoints) == 0 {
@@ -573,9 +597,16 @@ func (s *Scanner) ScanIPsWithProgress(cidrs []string, opts IPScanOptions, progre
 	// Build endpoints: fixed ip:port pairs first, then CIDR-expanded IPs × all ports
 	endpoints := make([]simpleEndpoint, 0, len(fixedEndpoints)+len(allIPs)*len(opts.Ports))
 	endpoints = append(endpoints, fixedEndpoints...)
+buildEndpoints:
 	for _, ip := range allIPs {
 		for _, port := range opts.Ports {
 			endpoints = append(endpoints, simpleEndpoint{ip: ip, port: port})
+			// Mobile/low-RAM guard: bound total endpoints (and thus goroutines/
+			// channel buffers) so low-memory devices don't OOM on CDN-sized scans.
+			if opts.MaxEndpoints > 0 && len(endpoints) >= opts.MaxEndpoints {
+				s.logf("[DEBUG] reached MaxEndpoints cap (%d); scanning a subset\n", opts.MaxEndpoints)
+				break buildEndpoints
+			}
 		}
 	}
 	s.logf("[TRACE] ScanIPsWithProgress: total endpoints created: %d\n", len(endpoints))
@@ -597,6 +628,10 @@ func (s *Scanner) ScanIPsWithProgress(cidrs []string, opts IPScanOptions, progre
 			opts.AdaptiveDomainConcurrency = 1
 		}
 		s.logf("[DEBUG] Low-bandwidth IP scan: keeping concurrency=%d and domain concurrency=%d\n", opts.Concurrency, opts.AdaptiveDomainConcurrency)
+	} else if opts.DisableAutoConcurrency {
+		// Mobile: never auto-raise concurrency. High fanout on a phone saturates
+		// the fd table / radio and disconnects the device, yielding zero results.
+		s.logf("[DEBUG] auto-concurrency disabled; keeping concurrency=%d (endpoints=%d)\n", opts.Concurrency, endpointCount)
 	} else if endpointCount > 2500 && opts.Concurrency > 0 && opts.Concurrency < 2000 {
 		s.logf("[DEBUG] Increasing opts.Concurrency %d -> 2000 for large scan (endpoints=%d)", opts.Concurrency, endpointCount)
 		opts.Concurrency = 2000
