@@ -45,3 +45,8 @@ New Text Document.txt
 *.secret
 *.secrets
 internal/ui/sni_crash_test.go
+
+# Embedded bundle data — required at compile time by go:embed in
+# internal/bundledata/bundledata.go. Must be tracked despite *.csv / *.txt above.
+!internal/bundledata/embedded/
+!internal/bundledata/embedded/**
