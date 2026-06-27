@@ -380,6 +380,23 @@ func (s *Scanner) IsPaused() bool {
 	return atomic.LoadInt32(&s.paused) == 1
 }
 
+// Stop requests prompt cancellation: probe goroutines abort instead of running.
+// Unlike Pause (which blocks the pipeline), this lets ScanIPsWithProgress return
+// quickly so a stopped scan can finalize and surface its partial results.
+func (s *Scanner) Stop() {
+	atomic.StoreInt32(&s.stopped, 1)
+}
+
+// ResetStop clears the stopped flag so the scanner can be reused for a new run.
+func (s *Scanner) ResetStop() {
+	atomic.StoreInt32(&s.stopped, 0)
+}
+
+// IsStopped reports whether Stop has been requested.
+func (s *Scanner) IsStopped() bool {
+	return atomic.LoadInt32(&s.stopped) == 1
+}
+
 // Runtime toggles for the conservative heuristics. These update package
 // feature flags and mirror the config on the scanner instance.
 func (s *Scanner) SetProbeRequireHTMLForDomainTokens(v bool) {
@@ -768,7 +785,15 @@ func (s *Scanner) runThreeWavePipeline(ctx context.Context, endpoints []simpleEn
 				return
 			}
 
+			if atomic.LoadInt32(&s.stopped) == 1 {
+				atomic.AddInt32(&processed, 1)
+				return
+			}
 			for atomic.LoadInt32(&s.paused) == 1 {
+				if atomic.LoadInt32(&s.stopped) == 1 {
+					atomic.AddInt32(&processed, 1)
+					return
+				}
 				time.Sleep(100 * time.Millisecond)
 			}
 

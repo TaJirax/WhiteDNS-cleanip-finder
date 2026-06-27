@@ -51,7 +51,10 @@ type Scanner struct {
 	wg           sync.WaitGroup
 	// paused indicates the scanner is paused (1) or running (0)
 	paused int32
-	logCb  func(string)
+	// stopped, when 1, makes the probe pipelines abort in-flight and return
+	// promptly (used for responsive cancellation, e.g. mobile Stop()).
+	stopped int32
+	logCb   func(string)
 	// proxyProgressCb receives proxy-scan progress updates
 	proxyProgressCb func(processed, total, hits int, currentIP string, totalIPs int)
 	// File logging for debugging

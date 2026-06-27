@@ -49,7 +49,8 @@ func (h *ScanHandle) Resume() {
 	}
 }
 
-// Stop requests cancellation. Listener callbacks stop firing after this returns.
+// Stop requests cancellation. Probe goroutines abort in-flight so the current
+// chunk's ScanIPsWithProgress returns promptly and partial results are saved.
 func (h *ScanHandle) Stop() {
 	if h == nil {
 		return
@@ -59,7 +60,10 @@ func (h *ScanHandle) Stop() {
 		h.cancel()
 	}
 	if h.sc != nil {
-		h.sc.Pause()
+		// Real stop (not Pause, which would block the pipeline forever). Also
+		// clear any pause so blocked goroutines wake and observe the stop.
+		h.sc.Stop()
+		h.sc.Resume()
 	}
 }
 

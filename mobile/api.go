@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -76,6 +77,57 @@ func (rf *resultFile) close() string {
 	_ = rf.w.Flush()
 	_ = rf.f.Close()
 	return rf.path
+}
+
+// ── logFile ──────────────────────────────────────────────────────────────────
+// Persists the scan's activity log to {dataDir}/logs/. Called from many probe
+// goroutines, so writes are mutex-guarded. Very verbose engine lines (per-IP
+// DEBUG/TRACE/SKIP/PROGRESS) are filtered out to keep the file manageable.
+
+type logFile struct {
+	mu   sync.Mutex
+	f    *os.File
+	w    *bufio.Writer
+	path string
+}
+
+func openLogFile(dataDir, kind string) *logFile {
+	stamp := time.Now().Format("20060102-150405")
+	p := filepath.Join(dataDir, "logs", fmt.Sprintf("scan-%s-%s.log", kind, stamp))
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return nil
+	}
+	f, err := os.Create(p)
+	if err != nil {
+		return nil
+	}
+	return &logFile{f: f, w: bufio.NewWriterSize(f, 16*1024), path: p}
+}
+
+var verboseLogTags = []string{"[DEBUG]", "[TRACE]", "[SKIP]", "[PROGRESS]"}
+
+func (lf *logFile) write(line string) {
+	if lf == nil {
+		return
+	}
+	for _, tag := range verboseLogTags {
+		if strings.Contains(line, tag) {
+			return // skip very chatty lines
+		}
+	}
+	lf.mu.Lock()
+	_, _ = fmt.Fprintln(lf.w, line)
+	lf.mu.Unlock()
+}
+
+func (lf *logFile) close() {
+	if lf == nil {
+		return
+	}
+	lf.mu.Lock()
+	_ = lf.w.Flush()
+	_ = lf.f.Close()
+	lf.mu.Unlock()
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -186,20 +238,6 @@ func interChunkPause(conc int) time.Duration {
 	}
 }
 
-// gentleProbeDomains returns a reduced probe-domain list for low-concurrency
-// "gentle" modes (≤25 workers). Fewer probes per endpoint = far less bandwidth,
-// which keeps the user's connection alive on weak links.
-func gentleProbeDomains(conc int) []string {
-	switch {
-	case conc <= 10:
-		return []string{"workers.dev"}
-	case conc <= 25:
-		return []string{"workers.dev", "pages.dev", "chatgpt.com"}
-	default:
-		return nil // nil -> engine uses its full default list
-	}
-}
-
 func calcETA(start time.Time, processed, total int) int {
 	if processed <= 0 || processed >= total {
 		return 0
@@ -232,16 +270,23 @@ func StartIPScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 
 	sc.SetTargetPorts(ports)
 
+	lf := openLogFile(dataDir, "ip")
 	logThrottle := newThrottle(250 * time.Millisecond)
 	sc.SetLogCallback(func(msg string) {
+		line := strings.TrimRight(msg, "\n")
+		lf.write(line) // persist activity log to disk (filtered)
 		if !h.isStopped() && logThrottle.allow() {
-			l.OnLog(strings.TrimRight(msg, "\n"))
+			l.OnLog(line)
 		}
 	})
 
-	// Per-chunk options. DisableAutoConcurrency keeps worker count phone-safe;
-	// gentle modes probe fewer domains per IP. No MaxIPs/MaxEndpoints caps —
-	// coverage is full; chunking (not capping) is what bounds memory.
+	// Per-chunk options. DisableAutoConcurrency keeps worker count phone-safe.
+	// No MaxIPs/MaxEndpoints caps — coverage is full; chunking bounds memory.
+	//
+	// Bandwidth is reduced WITHOUT changing results: lower worker concurrency,
+	// inter-chunk pauses, and (for gentle/low-bandwidth modes) probing the
+	// endpoint's domains one-at-a-time (AdaptiveDomainConcurrency=1). The full
+	// probe-domain list is always used, so the same endpoints are found.
 	makeOpts := func() scanner.IPScanOptions {
 		o := scanner.IPScanOptions{
 			Ports:                  ports,
@@ -249,12 +294,7 @@ func StartIPScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 			Timeout:                timeout,
 			DisableAutoConcurrency: true,
 		}
-		if gentle := gentleProbeDomains(conc); gentle != nil {
-			o.ProbeDomainsHTTP = gentle
-			o.ProbeDomainsHTTPS = gentle
-			o.AdaptiveDomainConcurrency = 1
-		}
-		if cfg.LowBandwidth {
+		if conc <= 25 || cfg.LowBandwidth {
 			o.AdaptiveDomainConcurrency = 1
 		}
 		return o
@@ -262,6 +302,7 @@ func StartIPScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 
 	go func() {
 		defer sc.SetLogCallback(nil)
+		defer lf.close()
 
 		// 1. Stream-expand all CIDRs/IPs to a temp file (low RAM, full coverage).
 		tmpPath := filepath.Join(dataDir, "tmp", fmt.Sprintf("targets-%d.txt", time.Now().UnixNano()))
@@ -344,11 +385,10 @@ func StartIPScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 			runChunk(chunk) // final partial chunk
 		}
 
+		// Whether the scan finished or was stopped, partial results are already on
+		// disk — report success with the saved path so the Results screen shows
+		// them (a user-initiated stop is not an error).
 		savedPath := rf.close()
-		if h.isStopped() {
-			l.OnDone(savedPath, "stopped")
-			return
-		}
 		l.OnDone(savedPath, "")
 	}()
 	return h
