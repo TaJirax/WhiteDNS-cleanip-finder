@@ -1,13 +1,13 @@
 name: Build Android APK
 
 on:
-  workflow_dispatch:          # trigger manually from Actions tab
+  workflow_dispatch:
   push:
     tags:
-      - 'v*'                  # auto-build only on version tags (e.g. v1.0.0)
+      - 'v*'
 
-# GOTOOLCHAIN=local: prevents Go from trying to download Go 1.26 (which
-# doesn't exist yet) when it reads the go.mod directive. Go 1.24 is used.
+# GOTOOLCHAIN=local — stops Go from trying to download the non-existent Go 1.26
+# declared in go.mod. Go 1.25 (installed below) is used for everything.
 env:
   GOTOOLCHAIN: local
 
@@ -34,15 +34,15 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      # ── 4. Android SDK ──────────────────────────────────────────────────────
+      # ── 4. Android SDK (sets ANDROID_HOME in the environment) ────────────────
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
       # ── 5. NDK r26 ──────────────────────────────────────────────────────────
       - name: Install NDK r26
-        run: sdkmanager --install "ndk;26.3.11579264" "platforms;android-34" "build-tools;34.0.0"
-        env:
-          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/26.3.11579264
+        run: |
+          sdkmanager --install "ndk;26.3.11579264" "platforms;android-34" "build-tools;34.0.0"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/26.3.11579264" >> $GITHUB_ENV
 
       # ── 6. gomobile ─────────────────────────────────────────────────────────
       - name: Install gomobile
@@ -53,10 +53,12 @@ jobs:
 
       - name: gomobile init
         run: gomobile init
-        env:
-          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/26.3.11579264
 
-      # ── 7. Build whitescan.aar ──────────────────────────────────────────────
+      # ── 7. Register gomobile as a tool dep (required by Go 1.25+) ───────────
+      - name: Add gomobile tool dependency
+        run: go get -tool golang.org/x/mobile/cmd/gobind
+
+      # ── 8. Build whitescan.aar ──────────────────────────────────────────────
       - name: Build .aar (Go → Android library)
         run: |
           mkdir -p android/app/libs
@@ -66,10 +68,8 @@ jobs:
             -javapkg com.whitescan.engine \
             -o android/app/libs/whitescan.aar \
             ./mobile
-        env:
-          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/26.3.11579264
 
-      # ── 8. Gradle 8.7 + build APK ───────────────────────────────────────────
+      # ── 9. Gradle 8.7 + build APK ───────────────────────────────────────────
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v3
         with:
@@ -79,7 +79,7 @@ jobs:
         working-directory: android
         run: gradle assembleDebug
 
-      # ── 9. Upload APK artifact (30-day download link in Actions tab) ─────────
+      # ── 10. Upload APK artifact (30-day download in Actions tab) ─────────────
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
@@ -87,7 +87,7 @@ jobs:
           path: android/app/build/outputs/apk/debug/app-debug.apk
           retention-days: 30
 
-      # ── 10. GitHub Release (only when triggered by a version tag) ────────────
+      # ── 11. GitHub Release (only on v* tags) ─────────────────────────────────
       - name: Get short SHA
         id: sha
         run: echo "short=$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
