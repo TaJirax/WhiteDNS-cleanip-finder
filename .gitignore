@@ -2,6 +2,7 @@
 .whitedns/
 builds/
 __pycache__/
+.gocache/
 *.pyc
 
 # Generated binaries

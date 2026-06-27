@@ -87,15 +87,31 @@ jobs:
           SIGNING_KEY_ALIAS: ${{ secrets.TAJIRAX_KEY_ALIAS }}
           SIGNING_KEY_PASSWORD: ${{ secrets.TAJIRAX_KEY_PASSWORD }}
         run: |
-          if [ -z "$SIGNING_KEYSTORE_BASE64" ] || [ -z "$SIGNING_KEYSTORE_PASSWORD" ]; then
-            echo "Missing TAJIRAX_KEYSTORE_BASE64 or TAJIRAX_KEYSTORE_PASSWORD secrets."
-            exit 1
+          KEYSTORE_PATH="$RUNNER_TEMP/tajirax-release.jks"
+          KEYSTORE_PASSWORD="${SIGNING_KEYSTORE_PASSWORD:-tajirax-release-password}"
+          KEY_ALIAS="${SIGNING_KEY_ALIAS:-tajirax}"
+          KEY_PASSWORD="${SIGNING_KEY_PASSWORD:-$KEYSTORE_PASSWORD}"
+
+          if [ -n "$SIGNING_KEYSTORE_BASE64" ] && [ -n "$SIGNING_KEYSTORE_PASSWORD" ]; then
+            echo "$SIGNING_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
+            echo "Using TAJIRAX_KEYSTORE_BASE64 release signing key."
+          else
+            echo "TAJIRAX signing secrets are missing; generating a temporary Tajirax release key for this CI run."
+            echo "For Play Store updates, add TAJIRAX_KEYSTORE_BASE64 and TAJIRAX_KEYSTORE_PASSWORD secrets so every release uses the same key."
+            keytool -genkeypair \
+              -keystore "$KEYSTORE_PATH" \
+              -storepass "$KEYSTORE_PASSWORD" \
+              -alias "$KEY_ALIAS" \
+              -keypass "$KEY_PASSWORD" \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=tajirax, OU=WhiteDNS, O=tajirax, L=Tehran, ST=Tehran, C=IR"
           fi
-          echo "$SIGNING_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/tajirax-release.jks"
-          echo "SIGNING_KEYSTORE_PATH=$RUNNER_TEMP/tajirax-release.jks" >> "$GITHUB_ENV"
-          echo "SIGNING_KEYSTORE_PASSWORD=$SIGNING_KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
-          echo "SIGNING_KEY_ALIAS=${SIGNING_KEY_ALIAS:-tajirax}" >> "$GITHUB_ENV"
-          echo "SIGNING_KEY_PASSWORD=${SIGNING_KEY_PASSWORD:-$SIGNING_KEYSTORE_PASSWORD}" >> "$GITHUB_ENV"
+          echo "SIGNING_KEYSTORE_PATH=$KEYSTORE_PATH" >> "$GITHUB_ENV"
+          echo "SIGNING_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+          echo "SIGNING_KEY_ALIAS=$KEY_ALIAS" >> "$GITHUB_ENV"
+          echo "SIGNING_KEY_PASSWORD=$KEY_PASSWORD" >> "$GITHUB_ENV"
 
       - name: Build signed release APKs
         working-directory: android
