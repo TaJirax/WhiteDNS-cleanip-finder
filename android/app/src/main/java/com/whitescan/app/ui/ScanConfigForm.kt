@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Dns
 import androidx.compose.material3.*
@@ -27,28 +28,24 @@ data class FormState(
     val sniStrict: Boolean = false,
 )
 
-// All 18 port presets from the TUI (portPresets list in tui.go)
-private val PORT_PRESETS = listOf(
-    "80 · HTTP only"                        to "80",
-    "443 · HTTPS only"                      to "443",
-    "443,2053,2083,2087,2096,8443 · Cloudflare TLS"     to "443,2053,2083,2087,2096,8443",
-    "80,443,2053,2083,2087,2096,8443 · CF HTTP+TLS"     to "80,443,2053,2083,2087,2096,8443",
-    "80,443 · HTTP/HTTPS"                   to "80,443",
-    "80,443,8080 · Most common"             to "80,443,8080",
-    "80,8080,3128 · HTTP proxies"           to "80,8080,3128",
-    "443,8443 · HTTPS ports"               to "443,8443",
-    "8000-8100 · Dev range"                to "8000-8100",
-    "8080-8090 · Proxy range"              to "8080-8090",
-    "3000-3500 · App servers"              to "3000-3500",
-    "9000-9100 · Services"                 to "9000-9100",
-    "1080-1090 · SOCKS"                    to "1080-1090",
-    "8000,8001,8008,8080,8888 · Extended HTTP"          to "8000,8001,8008,8080,8888",
-    "80,443,3128,8080,8118 · Scan preset"  to "80,443,3128,8080,8118",
-    "80,443,2053,2083,2087,2096,8443 · CF scan"        to "80,443,2053,2083,2087,2096,8443",
-    "80,443,3128,8000,8080,8888,8118,9000,9050,1080 · All common" to "80,443,3128,8000,8080,8888,8118,9000,9050,1080",
-    "1080-1090,3128,8080,8118,9050-9051 · Full SOCKS"  to "1080-1090,3128,8080,8118,9050-9051",
-    "Custom…"                               to "",
+// Common single ports offered as checkboxes (multi-select). Ranges / anything
+// else can still be typed in the custom field below.
+private val COMMON_PORTS = listOf(
+    "80", "443", "2053", "2083", "2087", "2096", "8443", "8080", "3128", "8000", "8888",
 )
+
+// Parse a ports CSV into its trimmed tokens.
+private fun portTokens(csv: String): List<String> =
+    csv.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+
+private fun hasPort(csv: String, port: String): Boolean = portTokens(csv).contains(port)
+
+// Toggle a single port in/out of the CSV, preserving any other tokens (ranges).
+private fun togglePort(csv: String, port: String): String {
+    val parts = portTokens(csv).toMutableList()
+    if (parts.contains(port)) parts.remove(port) else parts.add(port)
+    return parts.joinToString(",")
+}
 
 // Android-safe worker modes. High fanout on a phone saturates the radio and
 // disconnects the device, so the modes are tuned down. "Ultra-light" and
@@ -61,7 +58,7 @@ private val CONCURRENCY_PRESETS = listOf(
     ConcurrencyPreset("Fast (100)",       "100"),
 )
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun ScanConfigForm(
     kind: ScanKind,
@@ -71,8 +68,7 @@ fun ScanConfigForm(
     onPickASN: () -> Unit,
 ) {
     val ctx = LocalContext.current
-    var showPortMenu by remember { mutableStateOf(false) }
-    var portPresetLabel by remember { mutableStateOf(PORT_PRESETS[2].first) } // default CF TLS
+    var showWorkerMenu by remember { mutableStateOf(false) }
     var showCustomConcurrency by remember { mutableStateOf(false) }
 
     LazyColumn(
@@ -82,24 +78,32 @@ fun ScanConfigForm(
 
         // ── Targets ───────────────────────────────────────────────────────────
         item {
-            SectionLabel("Targets  (IPs / CIDRs / ASNs)")
-            Spacer(Modifier.height(4.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Top) {
-                OutlinedTextField(
-                    value = form.targets,
-                    onValueChange = { onFormChange(form.copy(targets = it)) },
-                    modifier = Modifier.weight(1f).height(110.dp),
-                    placeholder = { Text("1.2.3.0/24\n5.6.7.8") },
-                )
-                FilledTonalIconButton(
-                    onClick = { paste(ctx) { text ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                SectionLabel("Targets  (IPs / CIDRs / ASNs)")
+                TextButton(onClick = {
+                    paste(ctx) { text ->
                         val sep = if (form.targets.isBlank()) text
                                   else "${form.targets.trimEnd()}\n$text"
                         onFormChange(form.copy(targets = sep))
-                    } },
-                    modifier = Modifier.size(48.dp).align(Alignment.CenterVertically),
-                ) { Icon(Icons.Default.ContentPaste, contentDescription = "Paste targets") }
+                    }
+                }) {
+                    Icon(Icons.Default.ContentPaste, contentDescription = "Paste",
+                        modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Paste")
+                }
             }
+            Spacer(Modifier.height(4.dp))
+            OutlinedTextField(
+                value = form.targets,
+                onValueChange = { onFormChange(form.copy(targets = it)) },
+                modifier = Modifier.fillMaxWidth().height(120.dp),
+                placeholder = { Text("1.2.3.0/24\n5.6.7.8") },
+            )
             Spacer(Modifier.height(8.dp))
             // Prominent full-width ASN picker button (big touch target), purple
             Button(
@@ -116,63 +120,65 @@ fun ScanConfigForm(
             }
         }
 
-        // ── Ports ─────────────────────────────────────────────────────────────
+        // ── Ports (checkbox multi-select) ─────────────────────────────────────
         item {
             SectionLabel("Ports")
             Spacer(Modifier.height(4.dp))
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Box {
-                    OutlinedButton(
-                        onClick = { showPortMenu = true },
-                        modifier = Modifier.height(48.dp),
-                    ) { Text(portPresetLabel.take(22), maxLines = 1) }
-                    DropdownMenu(expanded = showPortMenu, onDismissRequest = { showPortMenu = false }) {
-                        PORT_PRESETS.forEach { (label, value) ->
-                            DropdownMenuItem(
-                                text = { Text(label) },
-                                onClick = {
-                                    portPresetLabel = label
-                                    showPortMenu = false
-                                    if (value.isNotEmpty()) onFormChange(form.copy(ports = value))
-                                },
-                            )
-                        }
-                    }
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                COMMON_PORTS.forEach { p ->
+                    FilterChip(
+                        selected = hasPort(form.ports, p),
+                        onClick = { onFormChange(form.copy(ports = togglePort(form.ports, p))) },
+                        label = { Text(p) },
+                        modifier = Modifier.height(36.dp),
+                    )
                 }
-                OutlinedTextField(
-                    value = form.ports,
-                    onValueChange = { onFormChange(form.copy(ports = it)); portPresetLabel = "Custom…" },
-                    modifier = Modifier.weight(1f),
-                    placeholder = { Text("443,2053") },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                )
             }
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                value = form.ports,
+                onValueChange = { onFormChange(form.copy(ports = it)) },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Selected ports (edit / add ranges)") },
+                placeholder = { Text("443,2053,8000-8100") },
+                singleLine = true,
+            )
         }
 
-        // ── Concurrency + Low-bandwidth ───────────────────────────────────────
+        // ── Workers (dropdown) + Low-bandwidth ────────────────────────────────
         item {
             SectionLabel("Workers")
             Spacer(Modifier.height(4.dp))
-            // Android-safe worker modes (2 per row to fit phone width)
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                CONCURRENCY_PRESETS.take(2).forEach { preset ->
-                    ConcurrencyChip(preset, form, showCustomConcurrency,
-                        onPick = { showCustomConcurrency = false; onFormChange(it) })
-                }
+            val currentLabel = when {
+                showCustomConcurrency -> "Custom (${form.concurrency})"
+                else -> CONCURRENCY_PRESETS.find {
+                    it.value == form.concurrency && it.lowBw == form.lowBandwidth
+                }?.label ?: "Custom (${form.concurrency})"
             }
-            Spacer(Modifier.height(4.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                CONCURRENCY_PRESETS.drop(2).forEach { preset ->
-                    ConcurrencyChip(preset, form, showCustomConcurrency,
-                        onPick = { showCustomConcurrency = false; onFormChange(it) })
+            Box(Modifier.fillMaxWidth()) {
+                OutlinedButton(
+                    onClick = { showWorkerMenu = true },
+                    modifier = Modifier.fillMaxWidth().height(50.dp),
+                ) {
+                    Text(currentLabel, modifier = Modifier.weight(1f))
+                    Icon(Icons.Default.ArrowDropDown, contentDescription = null)
                 }
-                FilterChip(
-                    selected = showCustomConcurrency,
-                    onClick = { showCustomConcurrency = !showCustomConcurrency },
-                    label = { Text("Custom") },
-                    modifier = Modifier.height(36.dp),
-                )
+                DropdownMenu(expanded = showWorkerMenu, onDismissRequest = { showWorkerMenu = false }) {
+                    CONCURRENCY_PRESETS.forEach { preset ->
+                        DropdownMenuItem(
+                            text = { Text(preset.label) },
+                            onClick = {
+                                showCustomConcurrency = false
+                                onFormChange(form.copy(concurrency = preset.value, lowBandwidth = preset.lowBw))
+                                showWorkerMenu = false
+                            },
+                        )
+                    }
+                    DropdownMenuItem(
+                        text = { Text("Custom…") },
+                        onClick = { showCustomConcurrency = true; showWorkerMenu = false },
+                    )
+                }
             }
             if (showCustomConcurrency) {
                 Spacer(Modifier.height(6.dp))
@@ -185,7 +191,7 @@ fun ScanConfigForm(
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 )
             }
-            Spacer(Modifier.height(6.dp))
+            Spacer(Modifier.height(10.dp))
             // Low-bandwidth switch separate from chips (matching TUI's separate toggle)
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Switch(
@@ -284,24 +290,6 @@ fun ScanConfigForm(
             }
         }
     }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun ConcurrencyChip(
-    preset: ConcurrencyPreset,
-    form: FormState,
-    customActive: Boolean,
-    onPick: (FormState) -> Unit,
-) {
-    val isSelected = !customActive &&
-        form.concurrency == preset.value && form.lowBandwidth == preset.lowBw
-    FilterChip(
-        selected = isSelected,
-        onClick = { onPick(form.copy(concurrency = preset.value, lowBandwidth = preset.lowBw)) },
-        label = { Text(preset.label) },
-        modifier = Modifier.height(36.dp),
-    )
 }
 
 @Composable
