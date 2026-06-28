@@ -1,4 +1,4 @@
-# Builds the Go scanner engine into an Android .aar via gomobile.
+﻿# Builds the Go scanner engine into an Android .aar via gomobile.
 #
 # Prerequisites (see android/README.md for details):
 #   - JDK 17+            (java on PATH)
@@ -15,6 +15,9 @@ $repoRoot = $PSScriptRoot
 $outDir   = Join-Path $repoRoot "android/app/libs"
 $outAar   = Join-Path $outDir "whitescan.aar"
 $goBin    = Join-Path $env:USERPROFILE "go/bin"
+
+Push-Location $repoRoot
+try {
 
 if ((Test-Path $goBin) -and (($env:PATH -split ';') -notcontains $goBin)) {
     $env:PATH = "$goBin;$env:PATH"
@@ -49,3 +52,8 @@ $gomobileArgs = @(
 
 if ($LASTEXITCODE -ne 0) { Write-Error "gomobile bind failed ($LASTEXITCODE)" }
 Write-Host "OK -> $outAar" -ForegroundColor Green
+}
+finally {
+    Pop-Location
+}
+

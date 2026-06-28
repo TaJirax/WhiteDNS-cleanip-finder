@@ -54,10 +54,12 @@ if (-not (Test-Path $BuildDir)) {
 
 $SuccessCount = 0
 $FailCount = 0
+$ApprovedIconPath = Join-Path $ScriptDir "assets\app-icon-source.png"
 $DesktopIconPath = Join-Path $ScriptDir "android\app\src\main\res\drawable-nodpi\whitedns_logo.png"
 $WindowsResConfig = Join-Path $ScriptDir "cmd\whitedns\winres\winres.json"
 $WindowsIconPath = Join-Path $ScriptDir "cmd\whitedns\winres\whitedns-icon-256.png"
 $WindowsResPrefix = Join-Path $ScriptDir "cmd\whitedns\rsrc"
+$WindowsSysoPath = Join-Path $ScriptDir "cmd\whitedns\rsrc_windows_amd64.syso"
 
 function Get-GoWinresPath {
     $cmd = Get-Command go-winres -ErrorAction SilentlyContinue
@@ -90,7 +92,7 @@ function Update-WindowsIconResource {
     }
 
     Add-Type -AssemblyName System.Drawing
-    $source = [System.Drawing.Image]::FromFile($DesktopIconPath)
+    $source = [System.Drawing.Image]::FromFile($SourceIconPath)
     try {
         $bitmap = New-Object System.Drawing.Bitmap 256, 256
         try {
@@ -115,7 +117,10 @@ function Update-WindowsIconResource {
         $source.Dispose()
     }
 
-    Write-Host "  [*] Updating Windows icon resources..." -ForegroundColor Gray
+    if (Test-Path $WindowsSysoPath) {
+        Remove-Item -LiteralPath $WindowsSysoPath -Force
+    }
+    Write-Host "  [*] Updating Windows icon resources from $SourceIconPath..." -ForegroundColor Gray
     & $goWinres make --in $WindowsResConfig --arch amd64 --out $WindowsResPrefix
     if ($LASTEXITCODE -ne 0) {
         throw "go-winres failed with exit code $LASTEXITCODE"
@@ -294,6 +299,7 @@ Failed: $FailCount
 finally {
     Pop-Location
 }
+
 
 
 
