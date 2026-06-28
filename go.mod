@@ -1,4 +1,4 @@
-﻿module whitedns-go
+module whitedns-go
 
 go 1.25.0
 
