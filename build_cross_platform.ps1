@@ -15,6 +15,32 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Push-Location $ScriptDir
 try {
 
+# Apply generated app icon assets before building. This only changes icon files.
+$IconScript = Join-Path $ScriptDir "scripts\apply_app_icon.py"
+if (Test-Path $IconScript) {
+    $PythonCmd = Get-Command python -ErrorAction SilentlyContinue
+    if ($PythonCmd) {
+        $OldErrorActionPreference = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        & $PythonCmd.Source -c "import PIL" *> $null
+        $PillowExitCode = $LASTEXITCODE
+        $ErrorActionPreference = $OldErrorActionPreference
+        if ($PillowExitCode -eq 0) {
+            Write-Host "[*] Applying app icon assets..." -ForegroundColor Yellow
+            & $PythonCmd.Source $IconScript
+            if ($LASTEXITCODE -ne 0) {
+                throw "icon generation failed with exit code $LASTEXITCODE"
+            }
+        }
+        else {
+            Write-Host "[!] Python Pillow package not found; using existing icon assets. Install with: python -m pip install -r requirements.txt" -ForegroundColor Yellow
+        }
+    }
+    else {
+        Write-Host "[!] Python not found; using existing icon assets." -ForegroundColor Yellow
+    }
+}
+
 # Create builds directory
 $BuildDir = Join-Path $ScriptDir "builds"
 if ($CleanBuild -and (Test-Path $BuildDir)) {
@@ -268,3 +294,6 @@ Failed: $FailCount
 finally {
     Pop-Location
 }
+
+
+

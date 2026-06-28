@@ -1,4 +1,4 @@
-name: Build Android APK
+﻿name: Build Android APK
 
 on:
   workflow_dispatch:
@@ -6,7 +6,7 @@ on:
     tags:
       - 'v*'
 
-# GOTOOLCHAIN=local — stops Go from trying to download the non-existent Go 1.26
+# GOTOOLCHAIN=local â€” stops Go from trying to download the non-existent Go 1.26
 # declared in go.mod. Go 1.25 (installed below) is used for everything.
 env:
   GOTOOLCHAIN: local
@@ -18,23 +18,34 @@ jobs:
       contents: write
 
     steps:
-      # ── 1. Checkout ─────────────────────────────────────────────────────────
+      # â”€â”€ 1. Checkout â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       - uses: actions/checkout@v4
 
-      # ── 2. Go 1.25 ──────────────────────────────────────────────────────────
+      - name: Set up Python for icon generation
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install icon generation tooling
+        run: python -m pip install --upgrade -r requirements.txt
+
+      - name: Apply app icon assets
+        run: python scripts/apply_app_icon.py
+
+      # â”€â”€ 2. Go 1.25 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       - uses: actions/setup-go@v5
         with:
           go-version: '1.25'
           cache: true
           cache-dependency-path: go.sum
 
-      # ── 3. JDK 17 ───────────────────────────────────────────────────────────
+      # â”€â”€ 3. JDK 17 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       - uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
 
-      # ── 4. Android SDK (sets ANDROID_HOME in the environment) ────────────────
+      # â”€â”€ 4. Android SDK (sets ANDROID_HOME in the environment) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
@@ -43,13 +54,13 @@ jobs:
           # and has intermittently failed to unzip on GitHub-hosted runners.
           packages: platform-tools
 
-      # ── 5. NDK r26 ──────────────────────────────────────────────────────────
+      # â”€â”€ 5. NDK r26 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       - name: Install NDK r26
         run: |
           sdkmanager --install "ndk;26.3.11579264" "platforms;android-34" "build-tools;34.0.0"
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/26.3.11579264" >> $GITHUB_ENV
 
-      # ── 6. gomobile ─────────────────────────────────────────────────────────
+      # â”€â”€ 6. gomobile â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       - name: Install gomobile
         run: |
           go install golang.org/x/mobile/cmd/gomobile@latest
@@ -59,12 +70,12 @@ jobs:
       - name: gomobile init
         run: gomobile init
 
-      # ── 7. Register gomobile as a tool dep (required by Go 1.25+) ───────────
+      # â”€â”€ 7. Register gomobile as a tool dep (required by Go 1.25+) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       - name: Add gomobile tool dependency
         run: go get -tool golang.org/x/mobile/cmd/gobind
 
-      # ── 8. Build whitescan.aar ──────────────────────────────────────────────
-      - name: Build .aar (Go → Android library)
+      # â”€â”€ 8. Build whitescan.aar â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+      - name: Build .aar (Go â†’ Android library)
         run: |
           mkdir -p android/app/libs
           gomobile bind \
@@ -74,7 +85,7 @@ jobs:
             -o android/app/libs/whitescan.aar \
             ./mobile
 
-      # ── 9. Gradle 8.7 + build APK ───────────────────────────────────────────
+      # â”€â”€ 9. Gradle 8.7 + build APK â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v3
         with:
@@ -127,7 +138,7 @@ jobs:
           cp android/app/build/outputs/bundle/release/app-release.aab \
             android/release-artifacts/WhiteDNS-IP-Scanner-release.aab
 
-      # ── 10. Upload APK artifact (30-day download in Actions tab) ─────────────
+      # â”€â”€ 10. Upload APK artifact (30-day download in Actions tab) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -135,13 +146,13 @@ jobs:
           path: android/release-artifacts/*
           retention-days: 30
 
-      # ── 11. GitHub Release (only on v* tags) ─────────────────────────────────
+      # â”€â”€ 11. GitHub Release (only on v* tags) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       - name: Get short SHA
         id: sha
         run: echo "short=$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
 
       # Only publish a Release on real tag pushes. On a manual workflow_dispatch,
-      # github.ref_name is the branch ("main") — creating a tag from it collides
+      # github.ref_name is the branch ("main") â€” creating a tag from it collides
       # with the branch and breaks `git push`. Guard against that.
       - name: Upload to GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
@@ -152,3 +163,4 @@ jobs:
           body: "APK build for ${{ github.ref_name }} (${{ github.sha }})"
           files: android/release-artifacts/*
           fail_on_unmatched_files: false
+

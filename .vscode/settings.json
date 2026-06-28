@@ -1,0 +1,6 @@
+{
+  "python.analysis.extraPaths": [
+    "C:/Users/tajirax/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/Lib/site-packages"
+  ],
+  "python.defaultInterpreterPath": "C:/Users/tajirax/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/python.exe"
+}
