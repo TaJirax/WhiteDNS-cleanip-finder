@@ -65,24 +65,61 @@ Go to **Releases** and download the file for your operating system:
 
 ### Run
 
+> **Why can't I just double-click it on macOS/Linux?**
+> WhiteDNS is a terminal UI (TUI) application — it draws its interface inside a
+> terminal, so it has no window to open on double-click. On Windows the `.exe`
+> automatically launches a console, but on macOS and Linux a bare command-line
+> binary won't auto-attach a terminal (and Linux file managers block running
+> downloaded binaries for security). You must run it from a terminal as shown
+> below.
+
 Windows PowerShell:
 
 ```powershell
 .\whitedns-windows-amd64.exe -mode ui -host 0.0.0.0 -port 8080
 ```
 
-Linux/macOS:
+macOS (Intel: `whitedns-macos-amd64` · Apple Silicon: `whitedns-macos-arm64`):
 
 ```bash
+# cd into the folder where you downloaded the binary
+cd ~/Downloads
+
+# make it executable (only needed once)
+chmod +x ./whitedns-macos-arm64
+
+# clear Apple's Gatekeeper quarantine flag on the download (only needed once)
+xattr -d com.apple.quarantine ./whitedns-macos-arm64
+
+# run it
+./whitedns-macos-arm64 -mode ui -host 0.0.0.0 -port 8080
+```
+
+If you skip the `xattr` step, macOS shows *"cannot be opened because the
+developer cannot be verified."* You can also right-click the file in Finder →
+**Open** → **Open** to whitelist it once.
+
+Linux (x64: `whitedns-linux-amd64` · ARM64: `whitedns-linux-arm64`):
+
+```bash
+# cd into the folder where you downloaded the binary
+cd ~/Downloads
+
+# make it executable (only needed once)
 chmod +x ./whitedns-linux-amd64
+
+# run it
 ./whitedns-linux-amd64 -mode ui -host 0.0.0.0 -port 8080
 ```
 
-Proxy-only mode:
+Proxy-only mode (macOS/Linux):
 
 ```bash
 ./whitedns-linux-amd64 -mode proxy -host 0.0.0.0 -port 8080
 ```
+
+> **Note:** The leading `./` is required — without it the shell only searches
+> system `PATH`, not the current folder, and you'll get `command not found`.
 
 ### Desktop Notes
 
