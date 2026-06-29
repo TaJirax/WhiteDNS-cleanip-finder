@@ -417,17 +417,18 @@ func NewTUI(a *App) *tuiModel {
 		{key: "2", label: "Scan HTTP Proxies", action: "scan"},
 		{key: "3", label: "Scan SOCKS5 Proxies", action: "scan_socks5"},
 		{key: "4", label: "SNI Scanner (TLS Hostname Probe)", action: "sni_scanner"},
-		{key: "5", label: "Reload IP Pool", action: "reload_pool"},
-		{key: "6", label: "Manage IP Pool", action: "manage_pool"},
-		{key: "7", label: "Inspect IPs (ASN)", action: "inspect_ip"},
-		{key: "8", label: "Export ASN IPs", action: "export_asn"},
-		{key: "9", label: "Autotune Scan Rates", action: "autotune"},
-		{key: "10", label: "Desync Scanner", action: "desync_scanner"},
-		{key: "11", label: "Manage SNI Probe Domains", action: "manage_tls_probe"},
-		{key: "12", label: "Settings: Probe Heuristics", action: "toggle_probe_flags"},
-		{key: "13", label: "Config Maker", action: "config_maker"},
-		{key: "14", label: "Configure Desync", action: "configure_desync"},
-		{key: "15", label: "Clear Cache", action: "clear_cache"},
+		{key: "5", label: "Speed & Loss Rank (Cloudflare)", action: "speed_rank"},
+		{key: "6", label: "Reload IP Pool", action: "reload_pool"},
+		{key: "7", label: "Manage IP Pool", action: "manage_pool"},
+		{key: "8", label: "Inspect IPs (ASN)", action: "inspect_ip"},
+		{key: "9", label: "Export ASN IPs", action: "export_asn"},
+		{key: "10", label: "Autotune Scan Rates", action: "autotune"},
+		{key: "11", label: "Desync Scanner", action: "desync_scanner"},
+		{key: "12", label: "Manage SNI Probe Domains", action: "manage_tls_probe"},
+		{key: "13", label: "Settings: Probe Heuristics", action: "toggle_probe_flags"},
+		{key: "14", label: "Config Maker", action: "config_maker"},
+		{key: "15", label: "Configure Desync", action: "configure_desync"},
+		{key: "16", label: "Clear Cache", action: "clear_cache"},
 		{key: "0", label: "Exit", action: "exit"},
 	}
 
@@ -1298,6 +1299,7 @@ func (m tuiModel) viewScanning(w, h int) string {
 		"tls_probe":      "TLS Hostname Probe",
 		"sni_scanner":    "SNI Scanner (TLS Hostname Probe)",
 		"desync_scanner": "Desync Pair Miner (Native)",
+		"speed_rank":     "Speed & Loss Rank (Cloudflare)",
 	}[m.operationType]
 	if opLabel == "" {
 		opLabel = strings.ToUpper(m.scanKind) + " Proxy Scan"
@@ -1515,6 +1517,7 @@ func (m tuiModel) viewScanResults(w, h int) string {
 		"tls_probe":      "TLS Probe Results",
 		"sni_scanner":    "SNI Scanner Results (TLS Hostname Probe)",
 		"desync_scanner": "Desync Pair Miner Results",
+		"speed_rank":     "Speed & Loss Rank Results (best first)",
 	}[m.operationType]
 	if opLabel == "" {
 		opLabel = "Scan Results"
@@ -1871,6 +1874,9 @@ func (m tuiModel) activateMenuItem() (tuiModel, tea.Cmd) {
 	switch item.action {
 	case "scan_ips":
 		m.gotoScanMode("scan_ips", "ipscan")
+	case "speed_rank":
+		m.addLog("Speed & Loss Rank selected (Cloudflare benchmark)")
+		m.gotoScanMode("speed_rank", "speedrank")
 	case "scan":
 		m.gotoScanMode("scan", "http")
 	case "scan_socks5":
@@ -2504,6 +2510,13 @@ func (m tuiModel) handleSelectConcurrencyScreen(msg tea.Msg) (tuiModel, tea.Cmd)
 			m.addLog(fmt.Sprintf("Scan log file: %s", m.scanLogPath))
 			return m, m.cmdPoolOperation("scan_ips", targets)
 		}
+		if m.operationType == "speed_rank" {
+			m.startScanLogFile("speedrank", targets, ports, m.scanConfig.Concurrency, 12*time.Second)
+			m.scanMsgCh = make(chan tea.Msg, 65536)
+			m.addLog(fmt.Sprintf("Starting Speed & Loss Rank: ips=%d concurrency=%d", len(targets), m.scanConfig.Concurrency))
+			m.addLog(fmt.Sprintf("Scan log file: %s", m.scanLogPath))
+			return m, m.cmdPoolOperation("speed_rank", targets)
+		}
 		if m.operationType == "sni_scanner" {
 			endpointCount := len(targets) * len(ports)
 			timeout := scanTimeoutBudget(endpointCount, m.scanConfig.LowBandwidth)
@@ -2978,7 +2991,7 @@ func (m tuiModel) cmdScanWithConfig(targets []string, cfg scanConfig, scanKind s
 }
 
 func (m tuiModel) cmdPoolOperation(opType string, asnNetworks []string) tea.Cmd {
-	if opType == "scan_ips" || opType == "sni_scanner" || opType == "desync_scanner" {
+	if opType == "scan_ips" || opType == "sni_scanner" || opType == "desync_scanner" || opType == "speed_rank" {
 		cfg := m.scanConfig
 		scannerInst := m.app.Scanner
 		ch := m.scanMsgCh
@@ -2994,6 +3007,10 @@ func (m tuiModel) cmdPoolOperation(opType string, asnNetworks []string) tea.Cmd 
 				targets := asnNetworks
 				if len(targets) == 0 {
 					targets = cfg.Targets
+				}
+
+				if opType == "speed_rank" {
+					return m.runSpeedRank(ch, scannerInst, targets, cfg, t0)
 				}
 
 				ports := cfg.Ports
@@ -3446,6 +3463,111 @@ func (m *tuiModel) startOperation() {
 	m.scanHits = 0
 	m.scanResults = nil
 	m.scanErr = nil
+}
+
+// runSpeedRank benchmarks the given targets (IPs/CIDRs) with the Cloudflare
+// speed test, streams progress to the TUI, writes a ranked CSV, and returns the
+// completion message with a ranked, human-readable result list.
+func (m tuiModel) runSpeedRank(ch chan tea.Msg, scannerInst *scanner.Scanner, targets []string, cfg scanConfig, t0 time.Time) tea.Msg {
+	// Expand any CIDR ranges to individual IPs.
+	ips := tlsprobe.ExpandTargets(targets)
+	if len(ips) == 0 {
+		ips = targets
+	}
+	if len(ips) == 0 {
+		select {
+		case ch <- logMsg{text: "[!] Speed rank aborted: no IP targets selected"}:
+		default:
+		}
+		close(ch)
+		return poolOperationCompleteMsg{operationType: "speed_rank", results: []string{"Speed rank aborted: no IP targets selected"}, duration: time.Since(t0)}
+	}
+
+	port := 443
+	if len(cfg.Ports) > 0 && cfg.Ports[0] > 0 {
+		port = cfg.Ports[0]
+	}
+	conc := cfg.Concurrency
+	if conc <= 0 {
+		conc = 16
+	}
+	opts := scanner.SpeedRankOptions{
+		Port:        port,
+		Concurrency: conc,
+		PauseFunc: func() bool {
+			return scannerInst != nil && scannerInst.IsPaused()
+		},
+	}
+
+	total := len(ips)
+	start := time.Now()
+	select {
+	case ch <- logMsg{text: fmt.Sprintf("[SPEEDRANK] Benchmarking %d IP(s) via speed.cloudflare.com (port %d, concurrency %d)", total, port, conc)}:
+	default:
+	}
+	select {
+	case ch <- scanProgressMsg{current: 0, total: total, hits: 0, startTime: start, totalIPs: total}:
+	default:
+	}
+
+	runCtx := m.scanCtx
+	if runCtx == nil {
+		runCtx = context.Background()
+	}
+
+	progressCb := func(processed, totalIPs, reachable int, currentIP string) {
+		msg := scanProgressMsg{current: processed, total: totalIPs, hits: reachable, startTime: start, currentIP: currentIP, totalIPs: totalIPs}
+		select {
+		case ch <- msg:
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+
+	results := scanner.SpeedRankIPs(runCtx, ips, opts, progressCb)
+
+	// Build ranked, human-readable lines and stream them to the log view.
+	display := make([]string, 0, len(results))
+	reachable := 0
+	for i, r := range results {
+		if r.Reachable {
+			reachable++
+		}
+		line := scanner.FormatSpeedRankLine(i+1, r)
+		display = append(display, line)
+		select {
+		case ch <- logMsg{text: line}:
+		default:
+		}
+	}
+
+	csvPath, err := scanner.WriteSpeedRankCSV(m.app.DataDir, results)
+	if err != nil {
+		select {
+		case ch <- logMsg{text: fmt.Sprintf("[!] Failed to write speedrank CSV: %v", err)}:
+		default:
+		}
+	} else {
+		select {
+		case ch <- logMsg{text: fmt.Sprintf("[SPEEDRANK] Ranked CSV saved to %s", csvPath)}:
+		default:
+		}
+	}
+
+	summary := fmt.Sprintf("[SPEEDRANK-SUMMARY] ips=%d reachable=%d unreachable=%d", total, reachable, total-reachable)
+	select {
+	case ch <- logMsg{text: summary}:
+	default:
+	}
+	m.writeScanLogLine(summary)
+	close(ch)
+
+	if err := runCtx.Err(); err != nil {
+		return poolOperationCompleteMsg{operationType: "speed_rank", results: display, err: err, duration: time.Since(t0)}
+	}
+	if len(display) == 0 {
+		display = []string{"No IPs benchmarked"}
+	}
+	return poolOperationCompleteMsg{operationType: "speed_rank", results: display, duration: time.Since(t0)}
 }
 
 func (m *tuiModel) gotoScanMode(opType, kind string) {

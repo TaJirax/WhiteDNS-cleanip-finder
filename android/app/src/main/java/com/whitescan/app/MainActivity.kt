@@ -252,6 +252,7 @@ private fun ScanKind.label() = when (this) {
     ScanKind.SNI        -> "SNI Scan"
     ScanKind.HTTP       -> "HTTP Proxy"
     ScanKind.SOCKS5     -> "SOCKS5"
+    ScanKind.SPEED      -> "Speed & Loss"
     ScanKind.ASN_EXPORT -> "ASN Export"
 }
 

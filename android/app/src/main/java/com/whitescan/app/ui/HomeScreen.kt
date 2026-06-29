@@ -95,6 +95,13 @@ fun HomeScreen(onSelect: (ScanKind) -> Unit, onConfigMaker: () -> Unit) {
             onClick = { onSelect(ScanKind.SOCKS5) },
         )
         ScanCard(
+            icon = Icons.Default.Speed,
+            title = "Speed & Loss Rank",
+            subtitle = "Rank clean IPs by download/upload speed & packet loss",
+            accentColor = MintGreen,
+            onClick = { onSelect(ScanKind.SPEED) },
+        )
+        ScanCard(
             icon = Icons.Default.Download,
             title = "ASN Export",
             subtitle = "Search IranASNs, expand CIDRs to IP list",

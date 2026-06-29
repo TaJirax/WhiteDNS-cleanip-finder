@@ -649,6 +649,95 @@ func StartSNIScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 	return h
 }
 
+// ── Speed & Loss rank ────────────────────────────────────────────────────────
+
+// maxSpeedRankIPs caps how many IPs are benchmarked on a phone. The speed test
+// downloads/uploads several MB per IP, so this is intentionally small — the
+// feature is meant to rank an already-passed clean-IP shortlist, not a CIDR.
+const maxSpeedRankIPs = 256
+
+// StartSpeedRankScan benchmarks each target IP via the Cloudflare speed test
+// (with Google generate_204 and Cachefly as fallbacks) and ranks them by a
+// composite of download/upload throughput, packet loss, and latency. Results
+// are written best-first to {dataDir}/results/scan-speedrank-*.txt and a CSV is
+// saved alongside. Mirrors the desktop TUI "Speed & Loss Rank" scan.
+func StartSpeedRankScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
+	if cfg == nil {
+		cfg = &ScanConfig{}
+	}
+	h := newScanHandle(nil)
+
+	targets := splitTargets(cfg.Targets)
+	ports := parsePortsOrEmpty(cfg.Ports)
+	port := 443
+	if len(ports) > 0 && ports[0] > 0 {
+		port = ports[0]
+	}
+	conc := concurrencyOrDefault(cfg.Concurrency, 16)
+	timeout := timeoutOrDefault(cfg.TimeoutMs, 12*time.Second, cfg.LowBandwidth)
+
+	go func() {
+		ips := tlsprobe.ExpandTargets(targets)
+		if len(ips) == 0 {
+			ips = targets
+		}
+		if len(ips) == 0 {
+			l.OnDone("", "no IP targets selected")
+			return
+		}
+		if len(ips) > maxSpeedRankIPs {
+			l.OnLog(fmt.Sprintf("[SPEEDRANK] %d IPs given; benchmarking the first %d (speed test is heavy)", len(ips), maxSpeedRankIPs))
+			ips = ips[:maxSpeedRankIPs]
+		}
+
+		rf, _ := openResultFile(dataDir, "speedrank")
+		resultThrottle := newThrottle(250 * time.Millisecond)
+		start := time.Now()
+		total := len(ips)
+		l.OnLog(fmt.Sprintf("[SPEEDRANK] Benchmarking %d IP(s) via speed.cloudflare.com + fallbacks (port %d, concurrency %d)", total, port, conc))
+
+		opts := scanner.SpeedRankOptions{
+			Port:        port,
+			Concurrency: conc,
+			Timeout:     timeout,
+			PauseFunc:   h.isPaused,
+		}
+		progressCb := func(processed, totalIPs, reachable int, currentIP string) {
+			if !h.isStopped() {
+				l.OnProgress(processed, totalIPs, reachable, totalIPs, currentIP,
+					calcETA(start, processed, totalIPs))
+			}
+		}
+
+		results := scanner.SpeedRankIPs(h.ctx, ips, opts, progressCb)
+
+		reachable := 0
+		for i, r := range results {
+			if r.Reachable {
+				reachable++
+			}
+			line := scanner.FormatSpeedRankLine(i+1, r)
+			rf.write(line)
+			if resultThrottle.allow() {
+				l.OnResult(line)
+			}
+		}
+		rf.flush()
+		if csvPath, err := scanner.WriteSpeedRankCSV(dataDir, results); err == nil {
+			l.OnLog("[SPEEDRANK] Ranked CSV saved to " + csvPath)
+		}
+		l.OnLog(fmt.Sprintf("[SPEEDRANK] Done: %d reachable / %d total", reachable, total))
+
+		savedPath := rf.close()
+		if h.isStopped() {
+			l.OnDone(savedPath, "stopped")
+			return
+		}
+		l.OnDone(savedPath, "")
+	}()
+	return h
+}
+
 // ── ASN export & search ──────────────────────────────────────────────────────
 
 // ExportASN expands all ASNs matching query into a flat IP list on disk under
