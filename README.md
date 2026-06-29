@@ -99,6 +99,14 @@ If you skip the `xattr` step, macOS shows *"cannot be opened because the
 developer cannot be verified."* You can also right-click the file in Finder →
 **Open** → **Open** to whitelist it once.
 
+> **Apple Silicon (M1/M2/M3/M4):** the released macOS binaries are **ad-hoc
+> code-signed**, so they run without the `killed` error. If you ever see
+> `zsh: killed` (e.g. on a binary you built yourself), apply an ad-hoc signature
+> once:
+> ```bash
+> codesign --force --sign - ./whitedns-macos-arm64
+> ```
+
 Linux (x64: `whitedns-linux-amd64` · ARM64: `whitedns-linux-arm64`):
 
 ```bash

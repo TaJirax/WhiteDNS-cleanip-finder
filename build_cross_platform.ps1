@@ -131,6 +131,49 @@ function Update-WindowsIconResource {
     }
 }
 
+function Get-RcodesignPath {
+    $cmd = Get-Command rcodesign -ErrorAction SilentlyContinue
+    if ($cmd) {
+        return $cmd.Source
+    }
+    # Common cargo install location.
+    if ($Env:USERPROFILE) {
+        $cargoBin = Join-Path $Env:USERPROFILE ".cargo\bin\rcodesign.exe"
+        if (Test-Path $cargoBin) {
+            return $cargoBin
+        }
+    }
+    return $null
+}
+
+# Ad-hoc code-sign a cross-compiled macOS binary. Apple Silicon (arm64) refuses
+# to execute unsigned binaries (they die with "killed"), so without this every
+# Mac user has to run `codesign --sign -` themselves. rcodesign applies an ad-hoc
+# signature from Windows/Linux (no Mac required). Best-effort: if rcodesign is
+# not installed we warn and leave the binary unsigned rather than failing.
+function Invoke-DarwinAdHocSign {
+    param([string]$BinaryPath)
+
+    $rcodesign = Get-RcodesignPath
+    if (-not $rcodesign) {
+        Write-Host "  [!] rcodesign not found - macOS binary left UNSIGNED." -ForegroundColor Yellow
+        Write-Host "      Apple Silicon users would have to self-sign. Install once with:" -ForegroundColor Yellow
+        Write-Host "        cargo install apple-codesign" -ForegroundColor Yellow
+        Write-Host "      or download a prebuilt rcodesign from:" -ForegroundColor Yellow
+        Write-Host "        https://github.com/indygreg/apple-platform-rs/releases" -ForegroundColor Yellow
+        return $false
+    }
+
+    Write-Host "  [*] Ad-hoc signing macOS binary with rcodesign..." -ForegroundColor Gray
+    & $rcodesign sign $BinaryPath
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  [!] rcodesign signing failed (exit $LASTEXITCODE) - binary left unsigned." -ForegroundColor Yellow
+        return $false
+    }
+    Write-Host "  [OK] Ad-hoc signature applied (runs on Apple Silicon without 'killed')." -ForegroundColor Green
+    return $true
+}
+
 function Copy-DesktopIconAsset {
     if (Test-Path $DesktopIconPath) {
         Copy-Item -LiteralPath $DesktopIconPath -Destination (Join-Path $BuildDir "whitedns-icon.png") -Force
@@ -193,6 +236,12 @@ function Invoke-CrossPlatformBuild {
             Write-Host "       Output: $OutputPath" -ForegroundColor Gray
             Write-Host "       Size: $SizeMB MB" -ForegroundColor Gray
             Write-Host "       Time: ${Duration}s" -ForegroundColor Gray
+
+            # Ad-hoc sign macOS binaries so they run on Apple Silicon out of the box.
+            if ($OS -eq "darwin") {
+                Invoke-DarwinAdHocSign -BinaryPath $OutputPath | Out-Null
+            }
+
             return $true
         }
         else {
