@@ -101,14 +101,30 @@ fun ResultsScreen(
 
         HorizontalDivider()
 
-        // Show the file preview once loaded; until then (or if the file read is
-        // empty) fall back to the live results captured during the scan so a
-        // stopped scan still shows what it found immediately.
-        val display = if (state.preview.isNotEmpty()) state.preview else state.liveResults
+        // The file holds the COMPLETE result set; the live list is throttled
+        // (≤4/sec) so it can be far short of the real count. Prefer the file
+        // preview. While it is still loading and we know more results exist on
+        // disk (found > what the live list captured), show a loading state with
+        // the true count instead of flashing a misleading partial list.
+        val previewReady = state.preview.isNotEmpty()
+        val display = if (previewReady) state.preview else state.liveResults
+        // Show the loading state while the full set is being read from disk. Keyed
+        // on previewLoading (not the count) so it can never get stuck if the file
+        // read returns empty — it then falls through to the normal branches.
+        val awaitingFullList = !previewReady && state.previewLoading
         when {
-            state.previewLoading && display.isEmpty() -> {
-                Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(modifier = Modifier.padding(24.dp))
+            awaitingFullList -> {
+                Column(
+                    Modifier.fillMaxWidth().padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    CircularProgressIndicator()
+                    Text(
+                        if (state.found > 0) "Loading ${state.found} result(s)…" else "Loading results…",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
             display.isEmpty() -> {
