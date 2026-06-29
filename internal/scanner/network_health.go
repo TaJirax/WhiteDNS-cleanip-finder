@@ -702,6 +702,35 @@ func proxyTransferBenchmarkSummary(downloadKBps, uploadKBps float64) string {
 	return strings.Join(parts, " ")
 }
 
+// runTransferBenchmarkAsync runs the post-accept transfer benchmark OFF the scan
+// worker, bounded by benchSem, and logs the informational "[+]" speed line when
+// it finishes. It never blocks the worker and never affects the accept verdict
+// or the saved result. If the bounded pool is busy the benchmark is skipped.
+func (s *Scanner) runTransferBenchmarkAsync(benchSem chan struct{}, ip string, port int, probeLatency, timeout time.Duration) {
+	select {
+	case benchSem <- struct{}{}:
+	default:
+		return // pool busy — skip the optional speed tag
+	}
+	endpoint := fmt.Sprintf("%s:%d", ip, port)
+	isHTTPS := port == 443 || port == 2053 || port == 2083 || port == 2087 || port == 2096 || port == 8443
+	go func() {
+		defer func() { <-benchSem }()
+		downloadKBps, uploadKBps, transferTags := s.benchmarkEndpointTransfer(endpoint, isHTTPS, timeout)
+		if downloadKBps <= 0 && uploadKBps <= 0 && len(transferTags) == 0 {
+			return
+		}
+		parts := []string{"http", endpoint, fmt.Sprintf("lat=%dms", probeLatency.Milliseconds())}
+		if summary := proxyTransferBenchmarkSummary(downloadKBps, uploadKBps); summary != "" {
+			parts = append(parts, summary)
+		}
+		for _, tag := range transferTags {
+			parts = append(parts, fmt.Sprintf("[%s]", tag))
+		}
+		s.logf("[+] %s\n", strings.Join(parts, " "))
+	}()
+}
+
 func (s *Scanner) benchmarkEndpointTransfer(endpoint string, isHTTPS bool, timeout time.Duration) (float64, float64, []string) {
 	benchmarkTimeout := timeout
 	if benchmarkTimeout < 8*time.Second {

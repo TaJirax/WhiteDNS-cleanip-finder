@@ -268,5 +268,6 @@ private fun FormState.toEngineConfig(): ScanConfig {
     cfg.transferModel = transferModel
     cfg.setSNIDomains(sniDomains.trim())
     cfg.setSNIStrict(sniStrict)
+    cfg.setVerboseLog(verboseLog)
     return cfg
 }

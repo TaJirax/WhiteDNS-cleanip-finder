@@ -55,7 +55,7 @@ fun HomeScreen(onSelect: (ScanKind) -> Unit, onConfigMaker: () -> Unit) {
                     letterSpacing = 4.sp,
                 )
                 Text(
-                    "v1.2  ·  developed by TAjirax",
+                    "v1.3  ·  developed by TAjirax",
                     fontFamily = FontFamily.Monospace,
                     fontSize = 11.sp,
                     color = Color(0xFF003040),

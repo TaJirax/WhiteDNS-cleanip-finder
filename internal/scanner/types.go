@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -54,6 +55,11 @@ type Scanner struct {
 	// netGuardActive is 1 while a network-outage guard goroutine is pausing the
 	// scan and polling for connectivity to return (prevents duplicate guards).
 	netGuardActive int32
+	// verboseProbeLogs, when 1, emits the high-volume per-endpoint probe lines
+	// ([PROBE]/[SCORE]/[TIMEOUT]/[SKIP]/[NOISE]). Off by default: on large scans
+	// the string formatting + callback churn for every endpoint is real CPU.
+	// Accept/summary lines are always logged regardless.
+	verboseProbeLogs int32
 	// stopped, when 1, makes the probe pipelines abort in-flight and return
 	// promptly (used for responsive cancellation, e.g. mobile Stop()).
 	stopped int32
@@ -126,6 +132,33 @@ func (s *Scanner) InitFileLoggingWithFile(f *os.File) error {
 	s.logFileOwned = false
 	s.logf("[LOG_INIT] Scanner file logging attached (shared)\n")
 	return nil
+}
+
+// SetVerboseProbeLogging enables/disables the high-volume per-endpoint probe
+// log lines. Off by default for speed; turn on for debugging.
+func (s *Scanner) SetVerboseProbeLogging(enabled bool) {
+	if s == nil {
+		return
+	}
+	if enabled {
+		atomic.StoreInt32(&s.verboseProbeLogs, 1)
+	} else {
+		atomic.StoreInt32(&s.verboseProbeLogs, 0)
+	}
+}
+
+// GetVerboseProbeLogging reports whether per-endpoint probe logging is enabled.
+func (s *Scanner) GetVerboseProbeLogging() bool {
+	return s != nil && atomic.LoadInt32(&s.verboseProbeLogs) == 1
+}
+
+// vlogf is logf gated on verbose probe logging. When disabled it returns before
+// formatting, so the per-endpoint Sprintf cost is avoided entirely on big scans.
+func (s *Scanner) vlogf(format string, a ...interface{}) {
+	if s == nil || atomic.LoadInt32(&s.verboseProbeLogs) == 0 {
+		return
+	}
+	s.logf(format, a...)
 }
 
 // logf writes formatted log messages to callback and global logger

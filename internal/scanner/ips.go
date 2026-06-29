@@ -755,6 +755,9 @@ func (s *Scanner) runThreeWavePipeline(ctx context.Context, endpoints []simpleEn
 	// Network-outage breaker (see optimized pipeline for rationale).
 	var netDownStreak int32
 	const netDownTrip = 15
+	// Bounded pool for the async post-accept transfer benchmark (informational
+	// only; never blocks a worker — see runTransferBenchmarkAsync).
+	benchSem := make(chan struct{}, 3)
 
 	// Reuse previously computed IP set
 	totalIPs := totalIPsInit
@@ -772,7 +775,7 @@ func (s *Scanner) runThreeWavePipeline(ctx context.Context, endpoints []simpleEn
 				return
 			}
 			if useDeadCull && deadIPs.isDead(ip) {
-				s.logf("[SKIP] IP %s marked dead, skipping port %d\n", ip, port)
+				s.vlogf("[SKIP] IP %s marked dead, skipping port %d\n", ip, port)
 				atomic.AddInt32(&skippedCount, 1)
 				current := int(atomic.AddInt32(&processed, 1))
 				if progressCb != nil {
@@ -805,7 +808,7 @@ func (s *Scanner) runThreeWavePipeline(ctx context.Context, endpoints []simpleEn
 				atomic.StoreInt32(&netDownStreak, 0)
 			}
 			if shouldCountAsDeadIP(result) {
-				s.logf("[TIMEOUT] %s:%d timeout - dead state recorded\n", ip, port)
+				s.vlogf("[TIMEOUT] %s:%d timeout - dead state recorded\n", ip, port)
 				atomic.AddInt32(&timeoutCount, 1)
 				deadIPs.recordTimeout(ip)
 			} else if result != nil && result.Status == "accept" {
@@ -823,16 +826,7 @@ func (s *Scanner) runThreeWavePipeline(ctx context.Context, endpoints []simpleEn
 				}
 				s.logf("[ACCEPT] %s:%d status=%s domains=%d/%d domain_score=%d passed=[%s]\n", ip, port, result.Status, result.DomainsTested, result.DomainTotal, result.DomainScore, passedDomainsStr)
 				if !probeOpts.LowBandwidth {
-					if downloadKBps, uploadKBps, transferTags := s.benchmarkEndpointTransfer(fmt.Sprintf("%s:%d", ip, port), port == 443 || port == 2053 || port == 2083 || port == 2087 || port == 2096 || port == 8443, probeOpts.Timeout); downloadKBps > 0 || uploadKBps > 0 || len(transferTags) > 0 {
-						parts := []string{"http", fmt.Sprintf("%s:%d", ip, port), fmt.Sprintf("lat=%dms", probeLatency.Milliseconds())}
-						if summary := proxyTransferBenchmarkSummary(downloadKBps, uploadKBps); summary != "" {
-							parts = append(parts, summary)
-						}
-						for _, tag := range transferTags {
-							parts = append(parts, fmt.Sprintf("[%s]", tag))
-						}
-						s.logf("[+] %s\n", strings.Join(parts, " "))
-					}
+					s.runTransferBenchmarkAsync(benchSem, ip, port, probeLatency, probeOpts.Timeout)
 				}
 				resultLine := fmt.Sprintf("%s:%d", ip, port)
 				if passedDomainsStr != "" {
@@ -949,6 +943,14 @@ func incrementIP(ip net.IP) {
 }
 
 // probeIP tests connectivity to an IP:port combination
+// probePreReachabilityDial performs the fast pre-check TCP connect. It is a
+// package var so tests can stub it: the probe-level mocks operate at the
+// httpClient layer and do not intercept this raw dial.
+var probePreReachabilityDial = func(ctx context.Context, ipPort string, timeout time.Duration) (net.Conn, error) {
+	d := &net.Dialer{Timeout: timeout}
+	return d.DialContext(ctx, "tcp", ipPort)
+}
+
 func (s *Scanner) probeIP(ctx context.Context, ip string, port int, opts IPScanOptions) *IPScanResult {
 	if ctx == nil {
 		ctx = context.Background()
@@ -959,12 +961,39 @@ func (s *Scanner) probeIP(ctx context.Context, ip string, port int, opts IPScanO
 	}
 
 	isHTTPS := port == 443 || port == 2053 || port == 2083 || port == 2087 || port == 2096 || port == 8443
-	s.logf("[PROBE] Starting %s:%d (https=%v)\n", ip, port, isHTTPS)
+	s.vlogf("[PROBE] Starting %s:%d (https=%v)\n", ip, port, isHTTPS)
 
 	// Burst smoothing: very occasional tiny delay to avoid synchronized bursts.
 	// Keep this rare to minimize impact on throughput.
 	if rand.Intn(1000) < 10 { // ~1% chance
 		time.Sleep(time.Duration(1+rand.Intn(5)) * time.Millisecond)
+	}
+
+	// Fast reachability pre-check. Every probe domain dials the SAME ip:port, so
+	// if a TCP connect fails they all would — a dead/filtered IP can be culled
+	// with ONE dial instead of redialing for all ~9 domains (which, in
+	// low-bandwidth mode, run sequentially and each wait the full timeout). On
+	// networks full of filtered IPs this is the dominant cost and the reason a
+	// 50-worker scan still feels one-at-a-time.
+	//
+	// Result-preserving by construction: the connect window is the LARGEST
+	// first-attempt dial timeout any probe domain would use, so any IP the full
+	// probe could have connected to still connects here. Only IPs that cannot
+	// establish a TCP connection at all (i.e. would be marked dead anyway) are
+	// culled — just faster.
+	connectTimeout := probeTimeoutForDomain("workers.dev", opts.Timeout, 0, opts.EndpointCount)
+	if connectTimeout <= 0 {
+		connectTimeout = ScanTimeout
+	}
+	preConn, preErr := probePreReachabilityDial(ctx, fmt.Sprintf("%s:%d", ip, port), connectTimeout)
+	if preErr != nil {
+		result.Status = "dead"
+		result.Error = preErr.Error()
+		s.vlogf("[PROBE] Complete %s:%d status=dead (tcp pre-check: %v)\n", ip, port, preErr)
+		return result
+	}
+	if preConn != nil {
+		_ = preConn.Close()
 	}
 
 	if isHTTPS {
@@ -977,7 +1006,7 @@ func (s *Scanner) probeIP(ctx context.Context, ip string, port int, opts IPScanO
 		result = &IPScanResult{IP: ip, Port: port, Status: "dead"}
 	}
 
-	s.logf("[PROBE] Complete %s:%d status=%s domains=%d/%d score=%d\n",
+	s.vlogf("[PROBE] Complete %s:%d status=%s domains=%d/%d score=%d\n",
 		ip, port, result.Status, result.DomainsTested, result.DomainTotal, result.DomainScore)
 
 	return result
@@ -1125,15 +1154,15 @@ func (s *Scanner) probeHTTP(ctx context.Context, ip string, port int, opts IPSca
 			if bestResult.Error == "" {
 				bestResult.Error = fmt.Sprintf("insufficient domain confirmations: %d/%d", domainScore, acceptThreshold)
 			}
-			s.logf("[NOISE] %s:%d only %d/%d domains confirmed; rejecting to avoid ISP noise\n", ip, port, domainScore, acceptThreshold)
+			s.vlogf("[NOISE] %s:%d only %d/%d domains confirmed; rejecting to avoid ISP noise\n", ip, port, domainScore, acceptThreshold)
 		}
-		s.logf("[SCORE] %s:%d domains %d/%d passed:[%s]\n", ip, port, domainScore, len(domains), strings.Join(result.PassedDomains, ","))
+		s.vlogf("[SCORE] %s:%d domains %d/%d passed:[%s]\n", ip, port, domainScore, len(domains), strings.Join(result.PassedDomains, ","))
 		return bestResult
 	}
 	if result.Status == "" {
 		result.Status = "reject"
 	}
-	s.logf("[SCORE] %s:%d domains %d/%d passed:[%s]\n", ip, port, domainScore, len(domains), strings.Join(result.PassedDomains, ","))
+	s.vlogf("[SCORE] %s:%d domains %d/%d passed:[%s]\n", ip, port, domainScore, len(domains), strings.Join(result.PassedDomains, ","))
 
 	return result
 }
@@ -1391,13 +1420,13 @@ func (s *Scanner) probeHTTPS(ctx context.Context, ip string, port int, opts IPSc
 		bestResult.DomainTotal = len(domains)
 		bestResult.DomainsTested = len(domains)
 		bestResult.PassedDomains = result.PassedDomains
-		s.logf("[SCORE] %s:%d domains %d/%d passed:[%s]\n", ip, port, domainScore, len(domains), strings.Join(result.PassedDomains, ","))
+		s.vlogf("[SCORE] %s:%d domains %d/%d passed:[%s]\n", ip, port, domainScore, len(domains), strings.Join(result.PassedDomains, ","))
 		return bestResult
 	}
 	if result.Status == "" {
 		result.Status = "reject"
 	}
-	s.logf("[SCORE] %s:%d domains %d/%d passed:[%s]\n", ip, port, domainScore, len(domains), strings.Join(result.PassedDomains, ","))
+	s.vlogf("[SCORE] %s:%d domains %d/%d passed:[%s]\n", ip, port, domainScore, len(domains), strings.Join(result.PassedDomains, ","))
 
 	return result
 }

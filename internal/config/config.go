@@ -23,6 +23,8 @@ type Config struct {
 	// Persisted scanner toggles
 	ProbeRequireHTMLForDomainTokens bool
 	ProbeAcceptOnCertMatch          bool
+	// VerboseProbeLogs emits per-endpoint probe log lines (slower; for debugging).
+	VerboseProbeLogs bool
 }
 
 // MMDFDomainExcludes lists domains that don't support domain fronting

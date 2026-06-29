@@ -92,6 +92,12 @@ func (s *Scanner) runThreeWavePipelineOptimized(ctx context.Context, endpoints [
 	// ~24s the health monitor needs) so the scan doesn't race to the end.
 	var netDownStreak int32
 	const netDownTrip = 15
+	// The post-accept transfer benchmark only produces an informational log line
+	// (it does not affect the accept verdict or the saved result). Run it off the
+	// scan worker via a small bounded pool so workers never block on a download —
+	// a big win on live-IP-heavy ASNs. Best-effort: if the pool is busy the tag
+	// is simply skipped.
+	benchSem := make(chan struct{}, 3)
 
 	// Start worker pool
 	for w := 0; w < capVal; w++ {
@@ -153,16 +159,7 @@ func (s *Scanner) runThreeWavePipelineOptimized(ctx context.Context, endpoints [
 						}
 						s.logf("[ACCEPT] %s:%d status=%s domains=%d/%d domain_score=%d passed=[%s]\n", job.ip, job.port, result.Status, result.DomainsTested, result.DomainTotal, result.DomainScore, passedDomainsStr)
 						if !probeOpts.LowBandwidth {
-							if downloadKBps, uploadKBps, transferTags := s.benchmarkEndpointTransfer(fmt.Sprintf("%s:%d", job.ip, job.port), job.port == 443 || job.port == 2053 || job.port == 2083 || job.port == 2087 || job.port == 2096 || job.port == 8443, probeOpts.Timeout); downloadKBps > 0 || uploadKBps > 0 || len(transferTags) > 0 {
-								parts := []string{"http", fmt.Sprintf("%s:%d", job.ip, job.port), fmt.Sprintf("lat=%dms", probeLatency.Milliseconds())}
-								if summary := proxyTransferBenchmarkSummary(downloadKBps, uploadKBps); summary != "" {
-									parts = append(parts, summary)
-								}
-								for _, tag := range transferTags {
-									parts = append(parts, fmt.Sprintf("[%s]", tag))
-								}
-								s.logf("[+] %s\n", strings.Join(parts, " "))
-							}
+							s.runTransferBenchmarkAsync(benchSem, job.ip, job.port, probeLatency, probeOpts.Timeout)
 						}
 						resultLine := fmt.Sprintf("%s:%d", job.ip, job.port)
 						if passedDomainsStr != "" {

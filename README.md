@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <strong>Desktop 1.2 and Android 1.2 clean-IP scanner, proxy checker, ASN target expander, and WhiteDNS toolkit.</strong>
+  <strong>Desktop 1.3 and Android 1.3 clean-IP scanner, proxy checker, ASN target expander, and WhiteDNS toolkit.</strong>
 </p>
 
 <p align="center">
@@ -22,8 +22,8 @@
 
 | Release | Platform | What You Get | Best For |
 |---|---|---|---|
-| **WhiteDNS Desktop 1.2** | Windows, Linux, macOS, Termux | Terminal UI, proxy tools, scanner engine, config workflows, cross-platform binaries | Power users, desktop scanning, bulk workflows |
-| **WhiteDNS IP Scanner Android 1.2** | Android API 21+ | Native Android app, IP/CIDR scanner, SNI scanner, HTTP/SOCKS5 proxy scanner, ASN export, signed APK/AAB outputs | Phone-based scanning and portable clean-IP discovery |
+| **WhiteDNS Desktop 1.3** | Windows, Linux, macOS, Termux | Terminal UI, proxy tools, scanner engine, config workflows, cross-platform binaries | Power users, desktop scanning, bulk workflows |
+| **WhiteDNS IP Scanner Android 1.3** | Android API 21+ | Native Android app, IP/CIDR scanner, SNI scanner, HTTP/SOCKS5 proxy scanner, ASN export, signed APK/AAB outputs | Phone-based scanning and portable clean-IP discovery |
 
 Download the latest files from the **GitHub Releases** page:
 
@@ -48,7 +48,7 @@ WhiteDNS is a clean-IP discovery and proxy workflow toolkit. It expands IP range
 
 ---
 
-## Desktop 1.2 Guide
+## Desktop 1.3 Guide
 
 ### Download
 
@@ -138,7 +138,7 @@ Proxy-only mode (macOS/Linux):
 
 ---
 
-## Android 1.2 Guide
+## Android 1.3 Guide
 
 ### Download
 

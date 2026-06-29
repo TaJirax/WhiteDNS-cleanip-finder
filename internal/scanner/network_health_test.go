@@ -71,6 +71,14 @@ func TestScanIPsWithProgressLocalHTTP(t *testing.T) {
 	transportHealthProbe = func(ctx context.Context, site string, timeout time.Duration) bool { return true }
 	defer func() { transportHealthProbe = oldProbe }()
 
+	// The probe mocks operate at the httpClient layer; stub the raw pre-check
+	// dial so the test does not depend on a real listener.
+	oldPreDial := probePreReachabilityDial
+	probePreReachabilityDial = func(ctx context.Context, ipPort string, timeout time.Duration) (net.Conn, error) {
+		return nil, nil
+	}
+	defer func() { probePreReachabilityDial = oldPreDial }()
+
 	s := NewScanner(&ScannerConfig{})
 	s.httpClient = &http.Client{Transport: probeRoundTripper(func(req *http.Request) (*http.Response, error) {
 		host := req.Header.Get("Host")
@@ -97,6 +105,12 @@ func TestScanIPsRejectsSingleNoisyHitAcrossMultipleDomains(t *testing.T) {
 	oldProbe := transportHealthProbe
 	transportHealthProbe = func(ctx context.Context, site string, timeout time.Duration) bool { return true }
 	defer func() { transportHealthProbe = oldProbe }()
+
+	oldPreDial := probePreReachabilityDial
+	probePreReachabilityDial = func(ctx context.Context, ipPort string, timeout time.Duration) (net.Conn, error) {
+		return nil, nil
+	}
+	defer func() { probePreReachabilityDial = oldPreDial }()
 
 	s := NewScanner(&ScannerConfig{})
 	s.httpClient = &http.Client{Transport: probeRoundTripper(func(req *http.Request) (*http.Response, error) {

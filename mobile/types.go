@@ -19,6 +19,7 @@ type ScanConfig struct {
 	LowBandwidth  bool   // extend timeouts for slow links
 	SNIDomains    string // SNI scan: custom domains; empty -> managed defaults
 	SNIStrict     bool   // SNI scan: require SNI itself to be accepted
+	VerboseLog    bool   // emit per-endpoint probe log lines (slower; for debugging)
 }
 
 // NewScanConfig returns an empty config (convenient constructor for gomobile,

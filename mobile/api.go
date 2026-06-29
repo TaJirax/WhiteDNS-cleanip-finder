@@ -259,6 +259,48 @@ func calcETA(start time.Time, processed, total int) int {
 	return int(float64(total-processed) / rate)
 }
 
+// etaTracker estimates remaining time from the RECENT scan rate rather than the
+// cumulative average since start. The cumulative average is badly skewed by the
+// slow warm-up (health check, TLS handshakes, the first timeouts), which makes
+// the ETA read absurdly high (e.g. "3000m") for the first minute. A sliding
+// window over the last ~30s reflects the true steady-state pace.
+type etaTracker struct {
+	mu      sync.Mutex
+	times   []time.Time
+	counts  []int
+	windowS float64
+}
+
+func newETATracker() *etaTracker { return &etaTracker{windowS: 30} }
+
+func (e *etaTracker) eta(done, total int) int {
+	if done <= 0 || done >= total {
+		return 0
+	}
+	now := time.Now()
+	e.mu.Lock()
+	e.times = append(e.times, now)
+	e.counts = append(e.counts, done)
+	// Drop samples older than the window, always keeping at least one anchor.
+	cutoff := now.Add(-time.Duration(e.windowS) * time.Second)
+	drop := 0
+	for drop < len(e.times)-1 && e.times[drop].Before(cutoff) {
+		drop++
+	}
+	e.times = e.times[drop:]
+	e.counts = e.counts[drop:]
+	t0, c0 := e.times[0], e.counts[0]
+	e.mu.Unlock()
+
+	dt := now.Sub(t0).Seconds()
+	dc := done - c0
+	if dt <= 0 || dc <= 0 {
+		return 0
+	}
+	rate := float64(dc) / dt // endpoints per second over the recent window
+	return int(float64(total-done) / rate)
+}
+
 // ── IP / CIDR scan ───────────────────────────────────────────────────────────
 
 // StartIPScan scans IP ranges with FULL coverage but flat memory. It streams
@@ -279,6 +321,7 @@ func StartIPScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 	timeout := timeoutOrDefault(cfg.TimeoutMs, scanner.ScanTimeout, cfg.LowBandwidth)
 
 	sc.SetTargetPorts(ports)
+	sc.SetVerboseProbeLogging(cfg.VerboseLog)
 
 	lf := openLogFile(dataDir, "ip")
 	logThrottle := newThrottle(250 * time.Millisecond)
@@ -342,6 +385,7 @@ func StartIPScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 		resultThrottle := newThrottle(250 * time.Millisecond)
 		totalEndpoints := totalIPs * len(ports)
 		start := time.Now()
+		etaEst := newETATracker()
 		processedBase := 0 // endpoints fully scanned in prior chunks
 		foundTotal := 0
 		pause := interChunkPause(conc)
@@ -355,7 +399,7 @@ func StartIPScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 				if !h.isStopped() {
 					done := processedBase + processed
 					l.OnProgress(done, totalEndpoints, foundTotal+accepted, totalIPs,
-						currentIP, calcETA(start, done, totalEndpoints))
+						currentIP, etaEst.eta(done, totalEndpoints))
 				}
 			}
 			results, scanErr := sc.ScanIPsWithProgress(chunk, makeOpts(), progressCb)
@@ -432,6 +476,24 @@ func expandTargetsToFile(targets []string, path string) (int, error) {
 	}
 	w := bufio.NewWriterSize(f, 64*1024)
 	count := 0
+	// De-duplicate addresses so overlapping CIDRs/ASNs (e.g. selecting both a /16
+	// and a /24 inside it) don't scan the same IP twice. The seen-set is memory-
+	// capped: once it reaches dedupCap entries we stop tracking and emit the rest
+	// unfiltered, so a pathologically huge scan can never OOM the device. For
+	// typical scans (hundreds of thousands of IPs) it stays well under the cap and
+	// removes all duplicates. Result-neutral — only redundant work is skipped.
+	const dedupCap = 400_000
+	seen := make(map[string]struct{}, 1024)
+	emit := func(line string) {
+		if len(seen) < dedupCap {
+			if _, dup := seen[line]; dup {
+				return
+			}
+			seen[line] = struct{}{}
+		}
+		fmt.Fprintln(w, line)
+		count++
+	}
 	for _, t := range targets {
 		t = strings.TrimSpace(t)
 		if t == "" {
@@ -439,14 +501,12 @@ func expandTargetsToFile(targets []string, path string) (int, error) {
 		}
 		// ip:port passthrough
 		if host, _, err := net.SplitHostPort(t); err == nil && net.ParseIP(host) != nil {
-			fmt.Fprintln(w, t)
-			count++
+			emit(t)
 			continue
 		}
 		// bare IP
 		if net.ParseIP(t) != nil {
-			fmt.Fprintln(w, t)
-			count++
+			emit(t)
 			continue
 		}
 		// CIDR — stream each address
@@ -458,8 +518,7 @@ func expandTargetsToFile(targets []string, path string) (int, error) {
 		copy(cur, ipnet.IP.Mask(ipnet.Mask))
 		emitted := 0
 		for ipnet.Contains(cur) && emitted < perCIDRMaxIPs {
-			fmt.Fprintln(w, cur.String())
-			count++
+			emit(cur.String())
 			emitted++
 			incIP(cur)
 		}

@@ -26,6 +26,7 @@ data class FormState(
     val transferModel: String = "old",
     val sniDomains: String = "",
     val sniStrict: Boolean = false,
+    val verboseLog: Boolean = false,
 )
 
 // Common single ports offered as checkboxes (multi-select). Ranges / anything
@@ -202,6 +203,22 @@ fun ScanConfigForm(
                     Text("Low bandwidth mode", style = MaterialTheme.typography.bodyMedium)
                     Text(
                         "Extends timeouts for slow / high-latency links",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            // Verbose probe logging — off by default for speed.
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Switch(
+                    checked = form.verboseLog,
+                    onCheckedChange = { onFormChange(form.copy(verboseLog = it)) },
+                )
+                Column {
+                    Text("Verbose probe logging", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        "Logs every IP probe (slower) — turn on only for debugging",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

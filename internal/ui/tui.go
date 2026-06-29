@@ -102,7 +102,7 @@ func renderMenuTitle(width int, logs int) string {
 	meta := sDim.Render(fmt.Sprintf("logs:%d  %s", logs, time.Now().Format("15:04:05")))
 
 	if width < 72 {
-		line := renderGradientText("WHITEDNS v1.2", brandColors, true)
+		line := renderGradientText("WHITEDNS v1.3", brandColors, true)
 		credit := renderGradientText("developed by TAjirax", devColors, false)
 		return lipgloss.PlaceHorizontal(width, lipgloss.Center, line) + "\n" +
 			lipgloss.PlaceHorizontal(width, lipgloss.Center, credit) + "\n" +
@@ -131,7 +131,7 @@ func renderMenuTitle(width int, logs int) string {
 		out.WriteString(lipgloss.PlaceHorizontal(width, lipgloss.Center, renderGradientText(line, brandColors, true)))
 		out.WriteString("\n")
 	}
-	tagline := renderGradientText("v1.2  -  developed by TAjirax", devColors, true)
+	tagline := renderGradientText("v1.3  -  developed by TAjirax", devColors, true)
 	out.WriteString(lipgloss.PlaceHorizontal(width, lipgloss.Center, tagline))
 	out.WriteString("\n")
 	out.WriteString(lipgloss.PlaceHorizontal(width, lipgloss.Center, meta))
@@ -1246,6 +1246,7 @@ func (m tuiModel) viewToggleProbeFlags(w, h int) string {
 	title := sHeader.Render(" SETTINGS - PROBE HEURISTICS ")
 	requireHTML := "OFF"
 	acceptCert := "OFF"
+	verboseLog := "OFF"
 	if m.app != nil && m.app.Scanner != nil {
 		if m.app.Scanner.GetProbeRequireHTMLForDomainTokens() {
 			requireHTML = "ON"
@@ -1253,10 +1254,14 @@ func (m tuiModel) viewToggleProbeFlags(w, h int) string {
 		if m.app.Scanner.GetProbeAcceptOnCertMatch() {
 			acceptCert = "ON"
 		}
+		if m.app.Scanner.GetVerboseProbeLogging() {
+			verboseLog = "ON"
+		}
 	}
 	items := []string{
 		fmt.Sprintf("Require HTML for domain tokens  [%s]", requireHTML),
 		fmt.Sprintf("Accept on TLS cert match       [%s]", acceptCert),
+		fmt.Sprintf("Verbose probe logging          [%s]", verboseLog),
 	}
 	var rows strings.Builder
 	for i, item := range items {
@@ -1834,34 +1839,38 @@ func (m tuiModel) handleToggleProbeFlagsScreen(msg tea.Msg) (tuiModel, tea.Cmd) 
 			m.cursor--
 		}
 	case "down", "j":
-		if m.cursor < 1 {
+		if m.cursor < 2 {
 			m.cursor++
 		}
-	case "1", "enter", " ":
+	case "enter", " ", "1", "2", "3":
 		if m.app != nil && m.app.Scanner != nil {
-			if m.cursor == 0 {
-				cur := m.app.Scanner.GetProbeRequireHTMLForDomainTokens()
-				newVal := !cur
+			// Number keys select a row directly; enter/space toggle the cursor row.
+			target := m.cursor
+			switch k.String() {
+			case "1":
+				target = 0
+			case "2":
+				target = 1
+			case "3":
+				target = 2
+			}
+			switch target {
+			case 0:
+				newVal := !m.app.Scanner.GetProbeRequireHTMLForDomainTokens()
 				m.app.Scanner.SetProbeRequireHTMLForDomainTokens(newVal)
 				m.addLog(fmt.Sprintf("Probe RequireHTML toggled -> %v", newVal))
 				m.app.Cfg.ProbeRequireHTMLForDomainTokens = newVal
-				_ = config.SaveToFile(m.app.Cfg, storage.GetPaths().ConfigFile)
-			} else {
-				cur := m.app.Scanner.GetProbeAcceptOnCertMatch()
-				newVal := !cur
+			case 1:
+				newVal := !m.app.Scanner.GetProbeAcceptOnCertMatch()
 				m.app.Scanner.SetProbeAcceptOnCertMatch(newVal)
 				m.addLog(fmt.Sprintf("Probe AcceptOnCertMatch toggled -> %v", newVal))
 				m.app.Cfg.ProbeAcceptOnCertMatch = newVal
-				_ = config.SaveToFile(m.app.Cfg, storage.GetPaths().ConfigFile)
+			case 2:
+				newVal := !m.app.Scanner.GetVerboseProbeLogging()
+				m.app.Scanner.SetVerboseProbeLogging(newVal)
+				m.addLog(fmt.Sprintf("Verbose probe logging toggled -> %v", newVal))
+				m.app.Cfg.VerboseProbeLogs = newVal
 			}
-		}
-	case "2":
-		if m.app != nil && m.app.Scanner != nil {
-			cur := m.app.Scanner.GetProbeAcceptOnCertMatch()
-			newVal := !cur
-			m.app.Scanner.SetProbeAcceptOnCertMatch(newVal)
-			m.addLog(fmt.Sprintf("Probe AcceptOnCertMatch toggled -> %v", newVal))
-			m.app.Cfg.ProbeAcceptOnCertMatch = newVal
 			_ = config.SaveToFile(m.app.Cfg, storage.GetPaths().ConfigFile)
 		}
 	case "esc", "b":

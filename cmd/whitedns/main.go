@@ -62,6 +62,7 @@ func main() {
 			// Persisted scanner toggles override defaults
 			cfg.ProbeRequireHTMLForDomainTokens = persisted.ProbeRequireHTMLForDomainTokens
 			cfg.ProbeAcceptOnCertMatch = persisted.ProbeAcceptOnCertMatch
+			cfg.VerboseProbeLogs = persisted.VerboseProbeLogs
 		}
 	}
 	if mode == "proxy" {
@@ -171,6 +172,7 @@ func mustBuildApp(cfg config.Config, dataDir string) *ui.App {
 
 func buildServices(cfg config.Config, dataDir string) (*scanner.Scanner, *router.Router, *asn.ASNEngine, *rules.RuleEngine) {
 	scannerInst := scanner.NewScanner(defaultScannerConfig(cfg))
+	scannerInst.SetVerboseProbeLogging(cfg.VerboseProbeLogs)
 	routerInst := router.NewRouter(defaultRouterConfig())
 	asnEngine := asn.NewASNEngine(dataDir)
 	ruleEngine := rules.NewRuleEngine()
