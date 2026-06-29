@@ -165,7 +165,11 @@ function Invoke-DarwinAdHocSign {
     }
 
     Write-Host "  [*] Ad-hoc signing macOS binary with rcodesign..." -ForegroundColor Gray
-    & $rcodesign sign $BinaryPath
+    # rcodesign writes progress to stderr; under $ErrorActionPreference='Stop'
+    # PowerShell would turn that into a terminating error even on success. Force
+    # Continue for this call and trust the real exit code instead.
+    $ErrorActionPreference = "Continue"
+    & $rcodesign sign $BinaryPath 2>&1 | ForEach-Object { Write-Host "      $_" -ForegroundColor DarkGray }
     if ($LASTEXITCODE -ne 0) {
         Write-Host "  [!] rcodesign signing failed (exit $LASTEXITCODE) - binary left unsigned." -ForegroundColor Yellow
         return $false

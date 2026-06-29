@@ -518,22 +518,20 @@ func startProxyScan(dataDir, kind string, cfg *ScanConfig, l ScanListener) *Scan
 			results, err = sc.ScanHTTPProxies(targets, opts)
 		}
 
-		if err != nil || h.isStopped() {
-			msg := ""
-			if err != nil {
-				msg = err.Error()
-			} else {
-				msg = "stopped"
-			}
-			l.OnDone("", msg)
+		// Only a real engine error is fatal. A user-initiated stop is NOT an error:
+		// the scan returns whatever it found so far, and we persist it so the user
+		// never loses partial results by stopping (there is no manual save on phone).
+		if err != nil {
+			l.OnDone("", err.Error())
 			return
 		}
 
 		rf, _ := openResultFile(dataDir, kind)
 		resultThrottle := newThrottle(250 * time.Millisecond)
+		stopped := h.isStopped()
 		for _, r := range results {
 			rf.write(r)
-			if resultThrottle.allow() {
+			if !stopped && resultThrottle.allow() {
 				l.OnResult(r)
 			}
 		}
@@ -639,11 +637,8 @@ func StartSNIScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 				calcETA(start, processed, total))
 		}
 
-		if h.isStopped() {
-			l.OnDone("", "stopped")
-			_ = rf.close()
-			return
-		}
+		// A stop is not an error: SNI passes are written to disk as they are found,
+		// so return the saved path (not an error) and keep the partial results.
 		l.OnDone(rf.close(), "")
 	}()
 	return h
@@ -711,6 +706,9 @@ func StartSpeedRankScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHa
 
 		results := scanner.SpeedRankIPs(h.ctx, ips, opts, progressCb)
 
+		// Persist every ranked line to disk, but stream to the live UI only while
+		// not stopped — otherwise a stop would keep emitting results/logs.
+		stopped := h.isStopped()
 		reachable := 0
 		for i, r := range results {
 			if r.Reachable {
@@ -718,22 +716,21 @@ func StartSpeedRankScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHa
 			}
 			line := scanner.FormatSpeedRankLine(i+1, r)
 			rf.write(line)
-			if resultThrottle.allow() {
+			if !stopped && resultThrottle.allow() {
 				l.OnResult(line)
 			}
 		}
 		rf.flush()
-		if csvPath, err := scanner.WriteSpeedRankCSV(dataDir, results); err == nil {
+		if csvPath, err := scanner.WriteSpeedRankCSV(dataDir, results); err == nil && !stopped {
 			l.OnLog("[SPEEDRANK] Ranked CSV saved to " + csvPath)
 		}
-		l.OnLog(fmt.Sprintf("[SPEEDRANK] Done: %d reachable / %d total", reachable, total))
-
-		savedPath := rf.close()
-		if h.isStopped() {
-			l.OnDone(savedPath, "stopped")
-			return
+		if !stopped {
+			l.OnLog(fmt.Sprintf("[SPEEDRANK] Done: %d reachable / %d total", reachable, total))
 		}
-		l.OnDone(savedPath, "")
+
+		// A stop is not an error: every ranked line was already written to disk
+		// above, so return the saved path so the user keeps their partial results.
+		l.OnDone(rf.close(), "")
 	}()
 	return h
 }

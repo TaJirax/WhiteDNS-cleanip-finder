@@ -225,6 +225,7 @@ func benchmarkOneIP(ctx context.Context, ip string, opts SpeedRankOptions) Speed
 	var latencies []float64
 	failures := 0
 	for s := 0; s < opts.LossSamples; s++ {
+		waitWhilePaused(ctx, opts)
 		select {
 		case <-ctx.Done():
 			res.Error = "aborted"
@@ -255,6 +256,7 @@ func benchmarkOneIP(ctx context.Context, ip string, opts SpeedRankOptions) Speed
 	gotThroughput := false
 	var lastErr string
 	for _, ep := range opts.DownloadEndpoints {
+		waitWhilePaused(ctx, opts)
 		select {
 		case <-ctx.Done():
 			res.Error = "aborted"
@@ -281,8 +283,11 @@ func benchmarkOneIP(ctx context.Context, ip string, opts SpeedRankOptions) Speed
 	}
 
 	// --- Upload throughput (Cloudflare /__up only; pinned to candidate IP) ---
-	if mbps, err := measureUpload(ctx, addr, opts); err == nil {
-		res.UploadMbps = mbps
+	waitWhilePaused(ctx, opts)
+	if ctx.Err() == nil {
+		if mbps, err := measureUpload(ctx, addr, opts); err == nil {
+			res.UploadMbps = mbps
+		}
 	}
 
 	res.computeScore()

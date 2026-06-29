@@ -699,7 +699,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.scanResults = append(m.scanResults, v.currentIP)
 					}
 				}
-			} else if m.operationType != "scan_ips" && v.hits > prevHits {
+			} else if m.operationType != "scan_ips" && m.operationType != "speed_rank" && v.hits > prevHits {
 				// For scan_ips, currentIP is whichever endpoint a worker happened to
 				// finish when this throttled progress tick fired, not necessarily the
 				// one that just got accepted (probes run concurrently). Recording it
@@ -1485,7 +1485,8 @@ func (m tuiModel) viewScanning(w, h int) string {
 			sAccent.Render("  Live results:\n") + liveRows.String() + "\n" +
 			sHeader.Render(" ACTIVITY LOG ") + "\n" + logBlock,
 	)
-	return panel + "\n\n" + sDim.Render("p pause/resume  |  s save  |  c/q quit  |  Esc back")
+	legend := "Keys:  [p] pause/resume   [s] save results   [c] or [q] stop scan & return   [Esc] back"
+	return panel + "\n\n" + sDim.Render(legend)
 }
 
 func scanETA(start time.Time, current, total int) string {
@@ -1581,7 +1582,7 @@ func (m tuiModel) viewScanResults(w, h int) string {
 
 			// For SNI, it might contain the full text "hostname ip OK/FAIL ... "
 			// Wait, the dynamic append adds just IP. Let's fix that.
-			if m.operationType != "sni_scanner" {
+			if m.operationType != "sni_scanner" && m.operationType != "speed_rank" {
 				if !strings.Contains(r, ":") && len(portLabel) > 0 {
 					r = fmt.Sprintf("%s:%s", r, portLabel)
 				}
@@ -2551,17 +2552,20 @@ func (m tuiModel) handleSelectConcurrencyScreen(msg tea.Msg) (tuiModel, tea.Cmd)
 func (m tuiModel) handleScanningScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 	if k, ok := msg.(tea.KeyMsg); ok {
 		switch k.String() {
-		case "c":
+		case "c", "q":
+			// Stop the scan for every scan type. The context cancel aborts ctx-aware
+			// scans (SNI, speed rank); Scanner.Stop() aborts the engine pipeline
+			// (IP / HTTP / SOCKS5); Resume() unblocks any workers parked in pause so
+			// they observe the stop instead of hanging.
 			if m.scanCancel != nil {
 				m.scanCancel()
-				m.addLog("Scan cancelled")
 			}
-			m.goBack()
-		case "q":
-			if m.scanCancel != nil {
-				m.scanCancel()
-				m.addLog("Scan cancelled")
+			if m.app != nil && m.app.Scanner != nil {
+				m.app.Scanner.Stop()
+				m.app.Scanner.Resume()
 			}
+			m.scanPaused = false
+			m.addLog("Scan stopped")
 			m.goBack()
 		case "p":
 			// toggle pause
@@ -3458,6 +3462,13 @@ func (m *tuiModel) startOperation() {
 		m.scanCancel()
 	}
 	m.scanCtx, m.scanCancel = context.WithCancel(context.Background())
+	// Clear any stop/pause state left over from a previous run so the engine's
+	// cooperative flags don't abort or block this scan immediately.
+	if m.app != nil && m.app.Scanner != nil {
+		m.app.Scanner.ResetStop()
+		m.app.Scanner.Resume()
+	}
+	m.scanPaused = false
 	m.scanStartTime = time.Now()
 	m.scanProgress = 0
 	m.scanHits = 0
@@ -3525,7 +3536,9 @@ func (m tuiModel) runSpeedRank(ch chan tea.Msg, scannerInst *scanner.Scanner, ta
 
 	results := scanner.SpeedRankIPs(runCtx, ips, opts, progressCb)
 
-	// Build ranked, human-readable lines and stream them to the log view.
+	// Build ranked, human-readable lines. Stream them to the log view only if the
+	// scan was not stopped — otherwise a stop would still dump the full result list.
+	stopped := runCtx.Err() != nil
 	display := make([]string, 0, len(results))
 	reachable := 0
 	for i, r := range results {
@@ -3534,10 +3547,21 @@ func (m tuiModel) runSpeedRank(ch chan tea.Msg, scannerInst *scanner.Scanner, ta
 		}
 		line := scanner.FormatSpeedRankLine(i+1, r)
 		display = append(display, line)
+		if stopped {
+			continue
+		}
 		select {
 		case ch <- logMsg{text: line}:
 		default:
 		}
+	}
+	if stopped {
+		select {
+		case ch <- logMsg{text: "[SPEEDRANK] Stopped — partial results saved"}:
+		default:
+		}
+		close(ch)
+		return poolOperationCompleteMsg{operationType: "speed_rank", results: display, err: runCtx.Err(), duration: time.Since(t0)}
 	}
 
 	csvPath, err := scanner.WriteSpeedRankCSV(m.app.DataDir, results)
