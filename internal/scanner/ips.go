@@ -495,13 +495,10 @@ func (s *Scanner) ScanIPsWithCIDR(cidrs []string, opts IPScanOptions) ([]string,
 
 	// Connectivity gate runs only after the (purely local) IP expansion above so
 	// it can never prevent unique IPs from loading. It precedes the probing.
-	healthSummary := s.ensureTransportHealthy(context.Background(), "ip-scan", nil, opts.Timeout, 1)
-	stopHealthMonitor := func() {}
-	if healthSummary.Reachable >= 1 {
-		stopHealthMonitor = s.startTransportHealthMonitor(context.Background(), "ip-scan", nil, opts.Timeout, 1)
-	} else {
-		s.logf("[HEALTH] ip-scan health sites unreachable at startup; running without the pause-monitor\n")
-	}
+	_ = s.ensureTransportHealthy(context.Background(), "ip-scan", nil, opts.Timeout, 1)
+	// Always run the monitor; it only pauses on a genuine device outage (see the
+	// ScanIPsWithProgress path for rationale).
+	stopHealthMonitor := s.startTransportHealthMonitor(context.Background(), "ip-scan", nil, opts.Timeout, 1)
 	defer stopHealthMonitor()
 
 	// Build endpoints: fixed ip:port pairs first, then CIDR-expanded IPs × all ports
@@ -598,17 +595,13 @@ func (s *Scanner) ScanIPsWithProgress(cidrs []string, opts IPScanOptions, progre
 	// Connectivity gate runs only after the (purely local) IP expansion above so
 	// it can never prevent unique IPs from loading. It precedes the actual
 	// network probing below.
-	healthSummary := s.ensureTransportHealthy(context.Background(), "ip-scan", nil, opts.Timeout, 1)
-	// Only run the background pause-monitor if the device could actually reach a
-	// health site at startup. If it could not (e.g. Termux on a non-Iran
-	// network), the monitor would only generate false "outage" pauses and stall
-	// the scan, so we skip it and let the scan run unguarded.
-	stopHealthMonitor := func() {}
-	if healthSummary.Reachable >= 1 {
-		stopHealthMonitor = s.startTransportHealthMonitor(context.Background(), "ip-scan", nil, opts.Timeout, 1)
-	} else {
-		s.logf("[HEALTH] ip-scan health sites unreachable at startup; running without the pause-monitor\n")
-	}
+	_ = s.ensureTransportHealthy(context.Background(), "ip-scan", nil, opts.Timeout, 1)
+	// Always run the background monitor. It only pauses the scan on a GENUINE
+	// device outage (confirmed by a quick anycast TCP dial), never just because
+	// the Iranian health sites are unreachable — so it is safe even for users
+	// with no Iran ping, and it guards every chunk (including ones that begin
+	// while connectivity is briefly down).
+	stopHealthMonitor := s.startTransportHealthMonitor(context.Background(), "ip-scan", nil, opts.Timeout, 1)
 	defer stopHealthMonitor()
 
 	// Build endpoints: fixed ip:port pairs first, then CIDR-expanded IPs × all ports

@@ -386,7 +386,7 @@ func (s *Scanner) startTransportHealthMonitor(ctx context.Context, label string,
 				// Iranian sites unreachable for several checks. Only pause if the
 				// DEVICE is genuinely offline; if a quick anycast TCP dial succeeds,
 				// the user just has no Iran ping (or the scan is crowding out the
-				// probes) — never stall the scan in that case.
+				// probes) — keep scanning in that case.
 				if quickConnectivityCheck(timeout) {
 					consecutiveFailures = 0
 					if s.IsPaused() {
@@ -395,9 +395,16 @@ func (s *Scanner) startTransportHealthMonitor(ctx context.Context, label string,
 					}
 					continue
 				}
+				// Genuinely offline: PAUSE and keep retrying on every tick. The scan
+				// is never ended or abandoned — it simply waits, and the next
+				// successful check (Iranian sites OR the quick anycast dial above)
+				// resumes it automatically. Pressing Stop is the only thing that
+				// ends it.
 				if !s.IsPaused() {
 					s.Pause()
-					s.logf("[HEALTH] %s monitor pause: device offline (no connectivity) after %d consecutive checks\n", label, consecutiveFailures)
+					s.logf("[HEALTH] %s monitor pause: device offline — holding scan and retrying connectivity every %s\n", label, defaultTransportHealthInterval)
+				} else {
+					s.logf("[HEALTH] %s monitor: still offline, retrying connectivity…\n", label)
 				}
 			}
 		}
