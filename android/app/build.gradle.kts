@@ -3,8 +3,8 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
-val appVersionCode = 5
-val appVersionName = "1.3.2"
+val appVersionCode = 6
+val appVersionName = "1.3.3"
 
 android {
     namespace = "com.whitescan.app"

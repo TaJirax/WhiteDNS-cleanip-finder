@@ -1,9 +1,11 @@
 package com.whitescan.app.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -21,6 +23,7 @@ import com.whitescan.app.ScanKind
 
 @Composable
 fun HomeScreen(onSelect: (ScanKind) -> Unit, onConfigMaker: () -> Unit) {
+    val uriHandler = LocalUriHandler.current
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
@@ -71,7 +74,7 @@ fun HomeScreen(onSelect: (ScanKind) -> Unit, onConfigMaker: () -> Unit) {
                     letterSpacing = 4.sp,
                 )
                 Text(
-                    "v1.3.2  ·  developed by TAjirax",
+                    "v1.3.3  ·  developed by TAjirax",
                     fontFamily = FontFamily.Monospace,
                     fontSize = 11.sp,
                     color = Color(0xFF003040),
@@ -131,6 +134,28 @@ fun HomeScreen(onSelect: (ScanKind) -> Unit, onConfigMaker: () -> Unit) {
             accentColor = CyanAccent,
             onClick = onConfigMaker,
         )
+
+        // Telegram channel link, centered at the bottom of the menu.
+        Spacer(Modifier.height(6.dp))
+        Row(
+            modifier = Modifier
+                .clickable { uriHandler.openUri("https://t.me/whitedns") }
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Icon(
+                Icons.Default.Send,
+                contentDescription = "Telegram",
+                tint = CyanAccent,
+                modifier = Modifier.size(18.dp),
+            )
+            Text(
+                "t.me/whitedns",
+                style = MaterialTheme.typography.bodyMedium,
+                color = CyanAccent,
+            )
+        }
     }
     }
 }

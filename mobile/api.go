@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -48,19 +49,39 @@ type resultFile struct {
 	f    *os.File
 	w    *bufio.Writer
 	path string
+	// Companion file containing ONLY the ip:port of each passed result (no probe
+	// domains or extra columns) — a clean list ready to paste elsewhere.
+	ipF    *os.File
+	ipW    *bufio.Writer
+	ipPath string
 }
+
+// ipPortRegex matches the first IPv4 (with optional :port) in a result line, so
+// the clean ip:port list works for every scan's line format (plain "ip:port",
+// SNI "host ip:port OK …", Speed-Rank "N. ip DOWN …", proxy "http ip:port …").
+var ipPortRegex = regexp.MustCompile(`\b\d{1,3}(?:\.\d{1,3}){3}(?::\d{1,5})?\b`)
 
 func openResultFile(dataDir, kind string) (*resultFile, error) {
 	stamp := time.Now().Format("20060102-150405")
-	p := filepath.Join(dataDir, "results", fmt.Sprintf("scan-%s-%s.txt", kind, stamp))
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+	dir := filepath.Join(dataDir, "results")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
+	p := filepath.Join(dir, fmt.Sprintf("scan-%s-%s.txt", kind, stamp))
 	f, err := os.Create(p)
 	if err != nil {
 		return nil, err
 	}
-	return &resultFile{f: f, w: bufio.NewWriterSize(f, 32*1024), path: p}, nil
+	rf := &resultFile{f: f, w: bufio.NewWriterSize(f, 32*1024), path: p}
+	// Best-effort companion ip:port-only file; if it can't be created the main
+	// results file still works.
+	ipP := filepath.Join(dir, fmt.Sprintf("scan-%s-%s-ipport.txt", kind, stamp))
+	if ipF, ierr := os.Create(ipP); ierr == nil {
+		rf.ipF = ipF
+		rf.ipW = bufio.NewWriterSize(ipF, 16*1024)
+		rf.ipPath = ipP
+	}
+	return rf, nil
 }
 
 func (rf *resultFile) write(line string) {
@@ -68,6 +89,11 @@ func (rf *resultFile) write(line string) {
 		return
 	}
 	_, _ = fmt.Fprintln(rf.w, line)
+	if rf.ipW != nil {
+		if ipPort := ipPortRegex.FindString(line); ipPort != "" {
+			_, _ = fmt.Fprintln(rf.ipW, ipPort)
+		}
+	}
 }
 
 // flush persists buffered results to disk without closing the file. Called after
@@ -78,6 +104,10 @@ func (rf *resultFile) flush() {
 	}
 	_ = rf.w.Flush()
 	_ = rf.f.Sync()
+	if rf.ipW != nil {
+		_ = rf.ipW.Flush()
+		_ = rf.ipF.Sync()
+	}
 }
 
 func (rf *resultFile) close() string {
@@ -86,6 +116,10 @@ func (rf *resultFile) close() string {
 	}
 	_ = rf.w.Flush()
 	_ = rf.f.Close()
+	if rf.ipW != nil {
+		_ = rf.ipW.Flush()
+		_ = rf.ipF.Close()
+	}
 	return rf.path
 }
 

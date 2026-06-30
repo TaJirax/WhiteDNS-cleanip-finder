@@ -4,6 +4,8 @@
 package configmaker
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"net"
 	"net/url"
 	"regexp"
@@ -173,6 +175,12 @@ func rewriteConfig(configText, target string) string {
 	if configText == "" || target == "" || !strings.Contains(configText, "://") {
 		return configText
 	}
+	// vmess:// is base64-encoded JSON, not a URL — rewrite its add/port fields so
+	// the config stays valid (a naive host swap corrupts it and the client
+	// silently drops it).
+	if strings.HasPrefix(strings.ToLower(configText), "vmess://") {
+		return rewriteVmess(configText, target)
+	}
 	parsed, err := url.Parse(configText)
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 		return configText
@@ -188,6 +196,51 @@ func rewriteConfig(configText, target string) string {
 	}
 	parsed.Fragment = target
 	return parsed.String()
+}
+
+// rewriteVmess decodes a vmess:// base64-JSON config, points its address/port at
+// the target, and re-encodes it. On any failure it returns the original config
+// unchanged (so a malformed entry never silently disappears).
+func rewriteVmess(configText, target string) string {
+	payload := configText[len("vmess://"):]
+	if i := strings.IndexAny(payload, "#?"); i >= 0 {
+		payload = payload[:i]
+	}
+	raw, ok := decodeFlexibleBase64(payload)
+	if !ok {
+		return configText
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return configText
+	}
+	host, port, err := net.SplitHostPort(target)
+	if err != nil || host == "" || net.ParseIP(host) == nil {
+		return configText
+	}
+	m["add"] = host
+	m["port"] = port // vmess JSON stores port as a string
+	m["ps"] = target // display name
+	re, err := json.Marshal(m)
+	if err != nil {
+		return configText
+	}
+	return "vmess://" + base64.StdEncoding.EncodeToString(re)
+}
+
+// decodeFlexibleBase64 tries the common base64 variants (std/url, padded/raw)
+// since vmess payloads appear in all of them across clients.
+func decodeFlexibleBase64(s string) ([]byte, bool) {
+	s = strings.TrimSpace(s)
+	for _, enc := range []*base64.Encoding{
+		base64.StdEncoding, base64.RawStdEncoding,
+		base64.URLEncoding, base64.RawURLEncoding,
+	} {
+		if b, err := enc.DecodeString(s); err == nil {
+			return b, true
+		}
+	}
+	return nil, false
 }
 
 func splitTokens(r rune) bool {
