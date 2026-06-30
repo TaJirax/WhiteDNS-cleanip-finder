@@ -177,29 +177,36 @@ fun ResultsScreen(
     }
 }
 
-// A result line is "IP:port" optionally followed by a TAB and the passed probe
-// domains. Long-press copies ONLY the IP:port; the domains are shown as tags but
-// never included in the copied text.
+// Matches the first IPv4 (with optional :port) anywhere in a line.
+private val IP_PORT_REGEX = Regex("""\b\d{1,3}(?:\.\d{1,3}){3}(?::\d{1,5})?\b""")
+
+// A result line is usually "IP:port" optionally followed by a TAB and the passed
+// probe domains, but Speed-Rank / SNI lines embed the IP inside a longer string.
+// Long-press copies ONLY the extracted IP:port — never the whole formatted line
+// (which previously made it look like "the whole screen" was copied).
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ResultRow(line: String, onCopy: (String) -> Unit) {
     val tab = line.indexOf('\t')
-    val ip = (if (tab >= 0) line.substring(0, tab) else line).trim()
+    val display = (if (tab >= 0) line.substring(0, tab) else line).trim()
     val domains = if (tab >= 0) line.substring(tab + 1).trim() else ""
+    // Always copy just the IP:port, extracted from anywhere in the line.
+    val copyTarget = IP_PORT_REGEX.find(line)?.value ?: display
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .combinedClickable(
                 onClick = {},
-                onLongClick = { onCopy(ip) },
+                onLongClickLabel = "Copy IP",
+                onLongClick = { onCopy(copyTarget) },
             )
             .padding(vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Text(
-            ip,
+            display,
             fontSize = 13.sp,
             fontFamily = FontFamily.Monospace,
             fontWeight = FontWeight.SemiBold,

@@ -65,14 +65,31 @@ func ExtractTargets(raw string) []string {
 			continue
 		}
 		host, port, err := net.SplitHostPort(token)
-		if err != nil || host == "" || port == "" || net.ParseIP(host) == nil {
+		if err != nil {
+			// No port supplied. If the token is a bare IP, default to :443 so an
+			// IP-only list still produces usable IP:port targets.
+			if net.ParseIP(token) != nil {
+				host, port = token, "443"
+			} else {
+				continue
+			}
+		} else if port == "" {
+			// "ip:" with an empty port — also default to 443.
+			if net.ParseIP(host) != nil {
+				port = "443"
+			} else {
+				continue
+			}
+		}
+		if host == "" || net.ParseIP(host) == nil {
 			continue
 		}
-		if _, ok := seen[token]; ok {
+		endpoint := net.JoinHostPort(host, port)
+		if _, ok := seen[endpoint]; ok {
 			continue
 		}
-		seen[token] = struct{}{}
-		out = append(out, token)
+		seen[endpoint] = struct{}{}
+		out = append(out, endpoint)
 	}
 	sort.Strings(out)
 	return out
