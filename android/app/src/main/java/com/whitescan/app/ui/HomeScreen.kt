@@ -21,24 +21,26 @@ import com.whitescan.app.ScanKind
 
 @Composable
 fun HomeScreen(onSelect: (ScanKind) -> Unit, onConfigMaker: () -> Unit) {
-    Box(
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background),
         contentAlignment = Alignment.TopCenter,
     ) {
+    // Center the menu when it fits on screen, but scroll when it doesn't (large
+    // system fonts, low-resolution displays, small screens). Giving the
+    // scrollable Column a minimum height equal to the viewport lets the centered
+    // arrangement work while still allowing overflow to scroll.
+    val viewportHeight = maxHeight
     Column(
         modifier = Modifier
-            // Cap the width so the menu doesn't stretch awkwardly wide on tablets,
-            // and center it.
+            // Cap the width so the menu doesn't stretch awkwardly wide on tablets.
             .widthIn(max = 560.dp)
             .fillMaxWidth()
-            // Scrollable so the menu is reachable on small screens, large system
-            // fonts, low-resolution displays, and tablets where the cards would
-            // otherwise overflow off-screen with no way to scroll.
             .verticalScroll(rememberScrollState())
+            .heightIn(min = viewportHeight)
             .padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterVertically),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         // Branding mimics the TUI ASCII banner gradient.
@@ -69,7 +71,7 @@ fun HomeScreen(onSelect: (ScanKind) -> Unit, onConfigMaker: () -> Unit) {
                     letterSpacing = 4.sp,
                 )
                 Text(
-                    "v1.3.1  ·  developed by TAjirax",
+                    "v1.3.2  ·  developed by TAjirax",
                     fontFamily = FontFamily.Monospace,
                     fontSize = 11.sp,
                     color = Color(0xFF003040),
