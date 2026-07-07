@@ -5,6 +5,7 @@ builds/
 .gradle-user-home/
 __pycache__/
 .gocache/
+android/.gradle/
 *.pyc
 
 # Generated binaries
