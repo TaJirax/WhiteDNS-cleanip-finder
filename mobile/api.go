@@ -241,6 +241,18 @@ func timeoutOrDefault(ms int, def time.Duration, lowBandwidth bool) time.Duratio
 	return t
 }
 
+func forceLiteRuntime() bool {
+	return runtime.GOOS == "android" && (runtime.GOARCH == "arm" || runtime.GOARCH == "386")
+}
+
+func effectiveLiteMode(cfg *ScanConfig) bool {
+	return (cfg != nil && cfg.LiteMode) || forceLiteRuntime()
+}
+
+func effectiveLowBandwidth(cfg *ScanConfig, liteMode bool) bool {
+	return (cfg != nil && cfg.LowBandwidth) || liteMode
+}
+
 // concurrencyOrDefault keeps worker counts phone-safe. High fanout on a phone
 // saturates the radio/fd table and disconnects the device, so we hard-cap well
 // below desktop values.
@@ -269,14 +281,15 @@ const (
 
 	// Lite mode (old / low-RAM devices): much smaller chunks and a hard low
 	// concurrency cap to keep peak memory, fd usage and CPU minimal.
-	liteChunkIPCount   = 1000
-	liteMaxConcurrency = 15
+	liteChunkIPCount       = 512
+	liteChunkEndpointCount = 1024
+	liteMaxConcurrency     = 8
 
 	// Staging de-duplication set caps (the only RAM cost while expanding targets
 	// to disk). Normal mode dedups up to ~400k unique IPs (~25 MB); Lite mode
-	// keeps it tiny so big ASNs stage with almost no RAM on weak devices.
+	// disables the staging set so big ASNs stage with almost no RAM on weak devices.
 	stageDedupCap = 400_000
-	liteDedupCap  = 20_000
+	liteDedupCap  = 0
 )
 
 // interChunkPause returns a short delay inserted between chunks so the scan does
@@ -361,18 +374,29 @@ func StartIPScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 	sc := scanner.NewScanner(nil)
 	h := newScanHandle(sc)
 
+	liteMode := effectiveLiteMode(cfg)
+	lowBandwidth := effectiveLowBandwidth(cfg, liteMode)
 	targets := splitTargets(cfg.Targets)
 	ports := parsePortsCSV(cfg.Ports)
 	conc := concurrencyOrDefault(cfg.Concurrency, 50) // phone default: 50 workers
-	timeout := timeoutOrDefault(cfg.TimeoutMs, scanner.ScanTimeout, cfg.LowBandwidth)
+	timeout := timeoutOrDefault(cfg.TimeoutMs, scanner.ScanTimeout, lowBandwidth)
 
 	// Lite mode for old / low-RAM devices: smaller chunks, far lower concurrency,
 	// sequential per-IP domain probing, and inter-chunk pauses. This keeps peak
 	// memory, open file descriptors, and CPU low enough that the scan doesn't
 	// OOM/ANR-crash on weak hardware. Coverage is unchanged — only resource use.
 	chunkSize := chunkIPCount
-	if cfg.LiteMode {
+	if liteMode {
 		chunkSize = liteChunkIPCount
+		if len(ports) > 0 {
+			chunkSize = liteChunkEndpointCount / len(ports)
+			if chunkSize < 1 {
+				chunkSize = 1
+			}
+			if chunkSize > liteChunkIPCount {
+				chunkSize = liteChunkIPCount
+			}
+		}
 		if conc > liteMaxConcurrency {
 			conc = liteMaxConcurrency
 		}
@@ -403,9 +427,10 @@ func StartIPScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 			Ports:                  ports,
 			Concurrency:            conc,
 			Timeout:                timeout,
+			LowBandwidth:           lowBandwidth,
 			DisableAutoConcurrency: true,
 		}
-		if conc <= 25 || cfg.LowBandwidth || cfg.LiteMode {
+		if conc <= 25 || lowBandwidth || liteMode {
 			o.AdaptiveDomainConcurrency = 1
 		}
 		return o
@@ -419,7 +444,7 @@ func StartIPScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 		// Lite mode uses a tiny dedup set so even huge ASNs stage with minimal RAM
 		// (a single ASN has no internal duplicates, so nothing is lost).
 		dedupCap := stageDedupCap
-		if cfg.LiteMode {
+		if liteMode {
 			dedupCap = liteDedupCap
 		}
 		tmpPath := filepath.Join(dataDir, "tmp", fmt.Sprintf("targets-%d.txt", time.Now().UnixNano()))
@@ -433,8 +458,8 @@ func StartIPScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 			l.OnDone("", "no IPs expanded from CIDRs")
 			return
 		}
-		stagedMsg := fmt.Sprintf("[IP-SCAN-START] targets=%d staged_ips=%d ports=%d total_probes=%d concurrency=%d",
-			len(targets), totalIPs, len(ports), totalIPs*len(ports), conc)
+		stagedMsg := fmt.Sprintf("[IP-SCAN-START] targets=%d staged_ips=%d ports=%d total_probes=%d concurrency=%d lite=%v low_bandwidth=%v",
+			len(targets), totalIPs, len(ports), totalIPs*len(ports), conc, liteMode, lowBandwidth)
 		lf.write(stagedMsg)
 		l.OnLog(stagedMsg)
 
@@ -499,7 +524,7 @@ func StartIPScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 			if len(chunk) >= chunkSize {
 				runChunk(chunk)
 				chunk = chunk[:0]
-				if cfg.LiteMode {
+				if liteMode {
 					// Reclaim the chunk's memory promptly so peak RAM stays low on
 					// weak devices, then breathe before the next chunk.
 					runtime.GC()
@@ -622,9 +647,14 @@ func startProxyScan(dataDir, kind string, cfg *ScanConfig, l ScanListener) *Scan
 	sc := scanner.NewScanner(nil)
 	h := newScanHandle(sc)
 
+	liteMode := effectiveLiteMode(cfg)
+	lowBandwidth := effectiveLowBandwidth(cfg, liteMode)
 	targets := splitTargets(cfg.Targets)
 	conc := concurrencyOrDefault(cfg.Concurrency, 50)
-	timeout := timeoutOrDefault(cfg.TimeoutMs, 8*time.Second, cfg.LowBandwidth)
+	if liteMode && conc > liteMaxConcurrency {
+		conc = liteMaxConcurrency
+	}
+	timeout := timeoutOrDefault(cfg.TimeoutMs, 8*time.Second, lowBandwidth)
 
 	opts := scanner.ProxyScanOptions{
 		Ports:         parsePortsOrEmpty(cfg.Ports),
@@ -632,6 +662,7 @@ func startProxyScan(dataDir, kind string, cfg *ScanConfig, l ScanListener) *Scan
 		Concurrency:   conc,
 		Timeout:       timeout,
 		TransferModel: strings.TrimSpace(cfg.TransferModel),
+		LiteMode:      liteMode,
 	}
 
 	logThrottle := newThrottle(250 * time.Millisecond)
@@ -704,6 +735,8 @@ func StartSNIScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 		cfg = &ScanConfig{}
 	}
 	h := newScanHandle(nil)
+	liteMode := effectiveLiteMode(cfg)
+	lowBandwidth := effectiveLowBandwidth(cfg, liteMode)
 	targets := splitTargets(cfg.Targets)
 	domains := splitTargets(cfg.SNIDomains)
 	if len(domains) == 0 {
@@ -711,7 +744,10 @@ func StartSNIScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 	}
 	ports := parsePortsCSV(cfg.Ports)
 	conc := concurrencyOrDefault(cfg.Concurrency, 50)
-	timeout := timeoutOrDefault(cfg.TimeoutMs, scanner.ScanTimeout, cfg.LowBandwidth)
+	if liteMode && conc > liteMaxConcurrency {
+		conc = liteMaxConcurrency
+	}
+	timeout := timeoutOrDefault(cfg.TimeoutMs, scanner.ScanTimeout, lowBandwidth)
 
 	go func() {
 		if len(targets) == 0 || len(domains) == 0 {
@@ -807,6 +843,8 @@ func StartSpeedRankScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHa
 	}
 	h := newScanHandle(nil)
 
+	liteMode := effectiveLiteMode(cfg)
+	lowBandwidth := effectiveLowBandwidth(cfg, liteMode)
 	targets := splitTargets(cfg.Targets)
 	ports := parsePortsOrEmpty(cfg.Ports)
 	port := 443
@@ -814,7 +852,10 @@ func StartSpeedRankScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHa
 		port = ports[0]
 	}
 	conc := concurrencyOrDefault(cfg.Concurrency, 16)
-	timeout := timeoutOrDefault(cfg.TimeoutMs, 12*time.Second, cfg.LowBandwidth)
+	if liteMode && conc > 4 {
+		conc = 4
+	}
+	timeout := timeoutOrDefault(cfg.TimeoutMs, 12*time.Second, lowBandwidth)
 
 	go func() {
 		ips := tlsprobe.ExpandTargets(targets)

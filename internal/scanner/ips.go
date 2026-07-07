@@ -673,10 +673,11 @@ buildEndpoints:
 	s.httpClient = &http.Client{Transport: transport, Timeout: optimalTimeout}
 	s.logf("[DEBUG] ScanIPsWithProgress: adjusted client timeout to %s for %d endpoints\n", optimalTimeout.String(), endpointCount)
 
-	// Run pipeline with progress callback
-	// Use optimized worker pool for scans > 2500 endpoints (more efficient than semaphore-based)
-	if len(endpoints) > 2500 {
-		s.logf("[DEBUG] ScanIPsWithProgress: using optimized worker pool pipeline for %d endpoints\n", len(endpoints))
+	// Run pipeline with progress callback. Constrained/low-bandwidth mobile scans
+	// must also avoid the standard one-goroutine-per-endpoint path on small/final
+	// chunks; the worker pool keeps goroutine count bounded by opts.Concurrency.
+	if len(endpoints) > 2500 || opts.LowBandwidth {
+		s.logf("[DEBUG] ScanIPsWithProgress: using optimized worker pool pipeline for %d endpoints (low_bandwidth=%v)\n", len(endpoints), opts.LowBandwidth)
 		accepted := s.runThreeWavePipelineOptimized(context.Background(), endpoints, opts, progressCb)
 		s.logf("[TRACE] ScanIPsWithProgress: optimized pipeline complete - accepted=%d\n", len(accepted))
 		return accepted, nil

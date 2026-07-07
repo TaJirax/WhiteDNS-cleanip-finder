@@ -93,6 +93,21 @@ class MainActivity : ComponentActivity() {
         return base
     }
 
+    private fun shouldUseConstrainedScanDefaults(): Boolean {
+        val arch = System.getProperty("os.arch")?.lowercase().orEmpty()
+        val is32BitRuntime = arch == "arm" ||
+            arch.startsWith("armv7") ||
+            arch == "i686" ||
+            arch == "x86"
+        return is32BitRuntime || Build.SUPPORTED_64_BIT_ABIS.isEmpty()
+    }
+
+    private fun defaultFormState(): FormState =
+        if (shouldUseConstrainedScanDefaults())
+            FormState(concurrency = "8", lowBandwidth = true, liteMode = true)
+        else
+            FormState()
+
     @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -119,7 +134,7 @@ class MainActivity : ComponentActivity() {
                 ) {
                 var screen by remember { mutableStateOf<Screen>(Screen.Home) }
                 var pendingKind by remember { mutableStateOf(ScanKind.IP) }
-                var form by remember { mutableStateOf(FormState()) }
+                var form by remember { mutableStateOf(defaultFormState()) }
                 val scanState by vm.state.collectAsStateWithLifecycle()
 
                 // Auto-advance to results when scan finishes
@@ -184,7 +199,7 @@ class MainActivity : ComponentActivity() {
                             Screen.Home -> HomeScreen(
                                 onSelect = { kind ->
                                     vm.reset()
-                                    form = FormState()
+                                    form = defaultFormState()
                                     pendingKind = kind
                                     screen = if (kind == ScanKind.ASN_EXPORT) Screen.AsnPicker
                                              else Screen.Config(kind)
@@ -209,7 +224,7 @@ class MainActivity : ComponentActivity() {
                                     // start before any logging begins).
                                     try {
                                         val dir = currentScanDir().absolutePath
-                                        val engineCfg = form.toEngineConfig()
+                                        val engineCfg = form.toEngineConfig(shouldUseConstrainedScanDefaults())
                                         screen = Screen.Scanning(s.kind)
                                         startForegroundScanService(s.kind)
                                         vm.start(s.kind, dir, engineCfg)
@@ -234,7 +249,7 @@ class MainActivity : ComponentActivity() {
                                         vm.reset()
                                         startForegroundScanService(ScanKind.ASN_EXPORT)
                                         vm.start(ScanKind.ASN_EXPORT, currentScanDir().absolutePath,
-                                            form.copy(targets = targets).toEngineConfig())
+                                            form.copy(targets = targets).toEngineConfig(shouldUseConstrainedScanDefaults()))
                                         screen = Screen.Scanning(ScanKind.ASN_EXPORT)
                                     } else {
                                         screen = Screen.Config(pendingKind)
@@ -266,7 +281,7 @@ class MainActivity : ComponentActivity() {
                                 onBack = { screen = Screen.Home },
                                 onNewScan = {
                                     vm.reset()
-                                    form = FormState()
+                                    form = defaultFormState()
                                     screen = Screen.Home
                                 },
                             )
@@ -313,18 +328,23 @@ private fun ScanKind.label() = when (this) {
 }
 
 // Maps FormState → gomobile ScanConfig (setter names from gomobile Java codegen).
-private fun FormState.toEngineConfig(): ScanConfig {
+private fun FormState.toEngineConfig(constrainedDevice: Boolean = false): ScanConfig {
     // newScanConfig() is the gomobile factory (struct construction from Kotlin
     // is unreliable). Concurrency/TimeoutMs are Go int -> Java long -> Kotlin Long.
     val cfg = Mobile.newScanConfig()
+    val requestedConcurrency = concurrency.toIntOrNull() ?: 50
+    val effectiveLiteMode = liteMode || constrainedDevice
+    val effectiveConcurrency =
+        if (effectiveLiteMode) requestedConcurrency.coerceAtMost(8)
+        else requestedConcurrency
     cfg.targets       = targets.trim()
     cfg.ports         = ports.trim()
-    cfg.concurrency   = (concurrency.toIntOrNull() ?: 100).toLong()
-    cfg.lowBandwidth  = lowBandwidth
+    cfg.concurrency   = effectiveConcurrency.toLong()
+    cfg.lowBandwidth  = lowBandwidth || effectiveLiteMode
     cfg.transferModel = transferModel
     cfg.setSNIDomains(sniDomains.trim())
     cfg.setSNIStrict(sniStrict)
     cfg.setVerboseLog(verboseLog)
-    cfg.setLiteMode(liteMode)
+    cfg.setLiteMode(effectiveLiteMode)
     return cfg
 }

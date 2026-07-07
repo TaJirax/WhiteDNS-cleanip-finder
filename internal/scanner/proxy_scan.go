@@ -72,6 +72,9 @@ type ProxyScanOptions struct {
 	// TransferModel selects which transfer benchmark implementation to use.
 	// Valid values: "old" (default) or "brrr" (new fast model).
 	TransferModel string
+	// LiteMode uses the bounded worker verifier for HTTP proxy scans instead of
+	// the high-fanout desktop wave pipeline.
+	LiteMode bool
 }
 
 type ProxyScanResult struct {
@@ -178,7 +181,7 @@ func (s *Scanner) scanProxies(rawTargets []string, opts ProxyScanOptions, verifi
 	}
 
 	s.logf("[TRACE] scanProxies: about to call scanProxyCandidates with %d candidates\n", len(candidates))
-	verified := s.scanProxyCandidates(candidates, concurrency, timeout, verifier, opts.TransferModel)
+	verified := s.scanProxyCandidates(candidates, concurrency, timeout, verifier, opts.TransferModel, opts.LiteMode)
 	s.logf("[TRACE] scanProxies: scanProxyCandidates returned %d verified\n", len(verified))
 	return deduplicateProxyResults(verified), nil
 }
@@ -244,20 +247,21 @@ func (s *Scanner) withTargetPorts(ports []int, fn func() ([]string, error)) ([]s
 	return fn()
 }
 
-func (s *Scanner) scanProxyCandidates(candidates []string, concurrency int, timeout time.Duration, verifier proxyVerifier, transferModel string) []ProxyScanResult {
+func (s *Scanner) scanProxyCandidates(candidates []string, concurrency int, timeout time.Duration, verifier proxyVerifier, transferModel string, liteMode bool) []ProxyScanResult {
 	total := len(candidates)
 	if total == 0 {
 		return []ProxyScanResult{}
 	}
 
 	// For HTTP proxies, use optimized 3-wave pipeline
-	if _, isHTTP := verifier.(httpVerifier); isHTTP {
+	if _, isHTTP := verifier.(httpVerifier); isHTTP && !liteMode {
 		s.logf("[TRACE] scanProxyCandidates: Using 3-wave HTTP proxy pipeline for %d candidates\n", total)
 		return s.scanProxyCandidatesWave3(candidates, timeout, transferModel)
 	}
 
-	// For SOCKS5, use simple verification
-	s.logf("[DEBUG] scanProxyCandidates start (SOCKS5): total=%d concurrency=%d timeout=%s\n", total, concurrency, timeout.String())
+	// Lite HTTP and SOCKS5 use bounded worker verification.
+	protocol := proxyProtocolLabel(verifier)
+	s.logf("[DEBUG] scanProxyCandidates start (%s): total=%d concurrency=%d timeout=%s lite=%v\n", protocol, total, concurrency, timeout.String(), liteMode)
 	if s.proxyProgressCb != nil {
 		s.proxyProgressCb(0, total, 0, "", total)
 	}
@@ -322,7 +326,7 @@ func (s *Scanner) scanProxyCandidates(candidates []string, concurrency int, time
 	}
 	close(jobs)
 	wg.Wait()
-	s.logf("[DEBUG] scanProxyCandidates complete (SOCKS5) processed=%d hits=%d\n", atomic.LoadInt64(&completed), atomic.LoadInt64(&hits))
+	s.logf("[DEBUG] scanProxyCandidates complete (%s) processed=%d hits=%d\n", protocol, atomic.LoadInt64(&completed), atomic.LoadInt64(&hits))
 	return verified
 }
 
