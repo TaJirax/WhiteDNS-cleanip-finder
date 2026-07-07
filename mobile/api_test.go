@@ -144,6 +144,17 @@ func TestASNSearchAndExpand(t *testing.T) {
 	}
 }
 
+func TestASNSearchRowsLimit(t *testing.T) {
+	rows, err := asnSearchRows(t.TempDir(), "*", 3)
+	if err != nil {
+		t.Fatalf("asnSearchRows failed: %v", err)
+	}
+	lines := strings.FieldsFunc(strings.TrimSpace(rows), func(r rune) bool { return r == '\n' || r == '\r' })
+	if len(lines) != 3 {
+		t.Fatalf("expected 3 rows, got %d: %q", len(lines), rows)
+	}
+}
+
 func TestExpandTargetsLimited(t *testing.T) {
 	got := expandTargetsLimited([]string{"192.0.2.0/24", "198.51.100.10"}, 3)
 	want := []string{"192.0.2.0", "192.0.2.1", "192.0.2.2"}

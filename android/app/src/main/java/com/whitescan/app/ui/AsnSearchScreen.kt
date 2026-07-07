@@ -59,6 +59,7 @@ fun AsnSearchScreen(
 
     LaunchedEffect(trimmedQuery, constrainedDevice) {
         if (constrainedDevice &&
+            trimmedQuery.isNotEmpty() &&
             trimmedQuery != "*" &&
             trimmedQuery.length < CONSTRAINED_ASN_MIN_QUERY_CHARS
         ) {
@@ -67,8 +68,8 @@ fun AsnSearchScreen(
             return@LaunchedEffect
         }
 
-        delay(ASN_SEARCH_DEBOUNCE_MS)
         loading = true
+        delay(ASN_SEARCH_DEBOUNCE_MS)
         rows = withContext(Dispatchers.IO) {
             runCatching {
                 val search = trimmedQuery.ifBlank { "*" }
@@ -184,7 +185,7 @@ fun AsnSearchScreen(
             }
         } else if (constrainedDevice && rows.isEmpty() && trimmedQuery.isBlank()) {
             Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
-                Text("Search to load ASN matches", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("No ASN rows loaded", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         } else if (rows.isEmpty() && query.isNotBlank()) {
             Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {

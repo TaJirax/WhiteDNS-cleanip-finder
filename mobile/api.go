@@ -326,6 +326,10 @@ const (
 	// disables the staging set so big ASNs stage with almost no RAM on weak devices.
 	stageDedupCap = 400_000
 	liteDedupCap  = 0
+
+	// Android 32-bit devices should still show an ASN list, but only need a
+	// bounded first page in the picker to avoid a large Java/Kotlin string.
+	liteASNSearchLimit = 80
 )
 
 // interChunkPause returns a short delay inserted between chunks so the scan does
@@ -1211,7 +1215,11 @@ func ExportCIDRs(dataDir, cidrs string) (string, error) {
 // count reported is the IPv4 subnet count — so the picker never offers an ASN
 // that would fail to expand.
 func ASNSearch(dataDir, query string) (string, error) {
-	return asnSearchRows(dataDir, query, 0)
+	limit := 0
+	if forceLiteRuntime() {
+		limit = liteASNSearchLimit
+	}
+	return asnSearchRows(dataDir, query, limit)
 }
 
 func asnSearchRows(dataDir, query string, limit int) (string, error) {
