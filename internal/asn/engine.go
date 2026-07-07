@@ -382,7 +382,8 @@ func (e *ASNEngine) SearchByPattern(pattern string) ([]*ASNInfo, error) {
 }
 
 // SearchSummaries returns grouped IPv4 ASN matches without carrying every CIDR
-// in the result. A positive limit returns only the top N groups by subnet count.
+// in the result. A positive limit returns only the top N groups; explicit
+// searches prioritize match relevance before subnet count.
 func (e *ASNEngine) SearchSummaries(query string, limit int) ([]ASNSummary, error) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -424,6 +425,11 @@ func (e *ASNEngine) SearchSummaries(query string, limit int) ([]ASNSummary, erro
 	}
 
 	sort.Slice(results, func(i, j int) bool {
+		ri := summarySearchRank(query, results[i])
+		rj := summarySearchRank(query, results[j])
+		if ri != rj {
+			return ri < rj
+		}
 		if results[i].SubnetCount == results[j].SubnetCount {
 			return results[i].ASN < results[j].ASN
 		}
@@ -435,6 +441,46 @@ func (e *ASNEngine) SearchSummaries(query string, limit int) ([]ASNSummary, erro
 	}
 
 	return results, nil
+}
+
+func summarySearchRank(query string, summary ASNSummary) int {
+	query = strings.TrimSpace(query)
+	if query == "" || query == "*" || isPatternASNQuery(query) {
+		return 100
+	}
+
+	q := strings.ToLower(query)
+	qASN := strings.ToLower(NormalizeASN(query))
+	asn := strings.ToLower(summary.ASN)
+	asnNorm := strings.ToLower(NormalizeASN(summary.ASN))
+	name := strings.ToLower(summary.Name)
+
+	switch {
+	case qASN != "" && asnNorm == qASN:
+		return 0
+	case qASN != "" && strings.HasPrefix(asnNorm, qASN):
+		return 1
+	case name == q:
+		return 2
+	case strings.HasPrefix(name, q):
+		return 3
+	case strings.Contains(name, q):
+		return 4
+	case strings.Contains(asn, q) || (qASN != "" && strings.Contains(asnNorm, qASN)):
+		return 5
+	default:
+		return 100
+	}
+}
+
+func isPatternASNQuery(query string) bool {
+	query = strings.TrimSpace(query)
+	lower := strings.ToLower(query)
+	return strings.HasPrefix(lower, "regex:") ||
+		strings.HasPrefix(lower, "/regex:") ||
+		strings.HasPrefix(query, "^") ||
+		strings.HasSuffix(query, "$") ||
+		strings.ContainsAny(query, "*?")
 }
 
 // NormalizeASN normalizes an ASN identifier for exact comparison.
