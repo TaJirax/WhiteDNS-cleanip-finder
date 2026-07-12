@@ -417,18 +417,19 @@ func NewTUI(a *App) *tuiModel {
 		{key: "2", label: "Scan HTTP Proxies", action: "scan"},
 		{key: "3", label: "Scan SOCKS5 Proxies", action: "scan_socks5"},
 		{key: "4", label: "SNI Scanner (TLS Hostname Probe)", action: "sni_scanner"},
-		{key: "5", label: "Speed & Loss Rank (Cloudflare)", action: "speed_rank"},
-		{key: "6", label: "Reload IP Pool", action: "reload_pool"},
-		{key: "7", label: "Manage IP Pool", action: "manage_pool"},
-		{key: "8", label: "Inspect IPs (ASN)", action: "inspect_ip"},
-		{key: "9", label: "Export ASN IPs", action: "export_asn"},
-		{key: "10", label: "Autotune Scan Rates", action: "autotune"},
-		{key: "11", label: "Desync Scanner", action: "desync_scanner"},
-		{key: "12", label: "Manage SNI Probe Domains", action: "manage_tls_probe"},
-		{key: "13", label: "Settings: Probe Heuristics", action: "toggle_probe_flags"},
-		{key: "14", label: "Config Maker", action: "config_maker"},
-		{key: "15", label: "Configure Desync", action: "configure_desync"},
-		{key: "16", label: "Clear Cache", action: "clear_cache"},
+		{key: "5", label: "DNS Resolver / Tunnel Scan", action: "dns_scan"},
+		{key: "6", label: "Speed & Loss Rank (Cloudflare)", action: "speed_rank"},
+		{key: "7", label: "Reload IP Pool", action: "reload_pool"},
+		{key: "8", label: "Manage IP Pool", action: "manage_pool"},
+		{key: "9", label: "Inspect IPs (ASN)", action: "inspect_ip"},
+		{key: "10", label: "Export ASN IPs", action: "export_asn"},
+		{key: "11", label: "Autotune Scan Rates", action: "autotune"},
+		{key: "12", label: "Desync Scanner", action: "desync_scanner"},
+		{key: "13", label: "Manage SNI Probe Domains", action: "manage_tls_probe"},
+		{key: "14", label: "Settings: Probe Heuristics", action: "toggle_probe_flags"},
+		{key: "15", label: "Config Maker", action: "config_maker"},
+		{key: "16", label: "Configure Desync", action: "configure_desync"},
+		{key: "17", label: "Clear Cache", action: "clear_cache"},
 		{key: "0", label: "Exit", action: "exit"},
 	}
 
@@ -1002,6 +1003,7 @@ func (m tuiModel) viewScanMode(w, h int) string {
 		"[list] 🔍 Select from IranASN file",
 		"[paste] 📋 Paste targets (IPs/CIDRs)",
 		"[type] ⌨️ Type targets manually",
+		"[file] 📄 Import targets from .txt file",
 	}
 	return m.viewList(w, h,
 		fmt.Sprintf("SCAN MODE - %s", label),
@@ -1305,6 +1307,7 @@ func (m tuiModel) viewScanning(w, h int) string {
 		"sni_scanner":    "SNI Scanner (TLS Hostname Probe)",
 		"desync_scanner": "Desync Pair Miner (Native)",
 		"speed_rank":     "Speed & Loss Rank (Cloudflare)",
+		"dns_scan":       "DNS Resolver / Tunnel Scan",
 	}[m.operationType]
 	if opLabel == "" {
 		opLabel = strings.ToUpper(m.scanKind) + " Proxy Scan"
@@ -1524,6 +1527,7 @@ func (m tuiModel) viewScanResults(w, h int) string {
 		"sni_scanner":    "SNI Scanner Results (TLS Hostname Probe)",
 		"desync_scanner": "Desync Pair Miner Results",
 		"speed_rank":     "Speed & Loss Rank Results (best first)",
+		"dns_scan":       "DNS Tunnel-Ready Resolvers",
 	}[m.operationType]
 	if opLabel == "" {
 		opLabel = "Scan Results"
@@ -1882,6 +1886,8 @@ func (m tuiModel) handleToggleProbeFlagsScreen(msg tea.Msg) (tuiModel, tea.Cmd) 
 func (m tuiModel) activateMenuItem() (tuiModel, tea.Cmd) {
 	item := m.menu[m.cursor]
 	switch item.action {
+	case "dns_scan":
+		m.gotoScanMode("dns_scan", "dns")
 	case "scan_ips":
 		m.gotoScanMode("scan_ips", "ipscan")
 	case "speed_rank":
@@ -1964,7 +1970,7 @@ func (m tuiModel) handleScanModeScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 			m.cursor--
 		}
 	case "down", "j":
-		if m.cursor < 2 {
+		if m.cursor < 3 {
 			m.cursor++
 		}
 	case "enter":
@@ -1981,8 +1987,10 @@ func (m tuiModel) handleScanModeScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 			m.scanConfig.Mode = "type"
 			m.pushScreen(screenTypeTargets)
 			m.setupInput("Type targets (IPs/CIDRs, space or newline)")
-			// For TLS probe, also show 3 mode options (ASN, paste, type)
-			// but we don't add case 3 here; instead we detect operationType elsewhere
+		case 3:
+			m.scanConfig.Mode = "file"
+			m.pushScreen(screenTypeTargets)
+			m.setupInput("Path to .txt file with IPs/CIDRs (one per line)")
 		}
 	}
 	return m, nil
@@ -2203,6 +2211,10 @@ func (m tuiModel) handleSelectASNScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 			m.startOperation()
 			return m, m.cmdPoolOperation(m.operationType, m.scanConfig.ASNs)
 		}
+		// DNS scan launches directly from the selected ASN networks.
+		if m.operationType == "dns_scan" {
+			return m.launchDNSScan(m.scanConfig.ASNs)
+		}
 		m.pushScreen(screenSelectPorts)
 		m.cursor = 0
 	}
@@ -2239,6 +2251,35 @@ func (m tuiModel) handleTypeTargetsScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 		flat := strings.Join(strings.Fields(strings.ReplaceAll(m.pasteBuffer, "\n", " ")), " ")
 		m.ti.SetValue(flat)
 		m.setToast(sInfo.Render("Pasted — press Enter to review"), 2*time.Second)
+		return m, nil
+	}
+	if ok && k.String() == "enter" && m.scanConfig.Mode == "file" {
+		// File-import source: the input holds a path to a .txt list of targets.
+		path := strings.TrimSpace(m.ti.Value())
+		if path == "" {
+			m.goBack()
+			return m, nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			m.addLog(fmt.Sprintf("ERROR: cannot read %s: %v", path, err))
+			m.setToast(sError.Render("x cannot read file"), 4*time.Second)
+			return m, nil
+		}
+		stats := scanner.ParseTargetsFromPaste(string(data))
+		m.parsedTargetStats = &stats
+		m.parsedTargetsScroll = 0
+		m.cursor = 0
+		if len(stats.Valid) == 0 {
+			m.addLog(fmt.Sprintf("ERROR: no valid targets in %s", path))
+			m.setToast(sError.Render("No valid IPs/CIDRs in file"), 3*time.Second)
+			return m, nil
+		}
+		m.scanConfig.Targets = stats.Valid
+		m.scanConfig.ASNs = nil
+		m.addLog(fmt.Sprintf("Imported %d target(s) from %s", len(stats.Valid), path))
+		m.pushScreen(screenReviewTargets)
+		m.ti.Blur()
 		return m, nil
 	}
 	if ok && k.String() == "enter" {
@@ -2327,8 +2368,12 @@ func (m tuiModel) handleReviewTargetsScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 
 	switch k.String() {
 	case "enter":
-		// Proceed to port selection
 		m.addLog(fmt.Sprintf("Confirmed %d targets (%d invalid skipped)", len(m.scanConfig.Targets), len(m.parsedTargetStats.Invalid)))
+		// DNS scan needs no port/method/concurrency screens — launch directly.
+		if m.operationType == "dns_scan" {
+			return m.launchDNSScan(m.scanConfig.Targets)
+		}
+		// Proceed to port selection
 		m.pushScreen(screenSelectPorts)
 		m.cursor = 0
 		return m, nil

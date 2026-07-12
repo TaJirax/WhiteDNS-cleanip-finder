@@ -54,6 +54,9 @@ New Text Document.txt
 *.keystore
 internal/ui/sni_crash_test.go
 
+# Claude Code local skills (installed per-machine, not part of the project)
+.claude/skills/
+
 # Embedded bundle data — required at compile time by go:embed in
 # internal/bundledata/bundledata.go. Must be tracked despite *.csv / *.txt above.
 !internal/bundledata/embedded/
