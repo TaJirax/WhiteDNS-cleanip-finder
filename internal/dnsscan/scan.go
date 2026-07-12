@@ -178,6 +178,12 @@ func ScanResolver(ctx context.Context, ip string, opts Options, truth *TruthTabl
 	txtPort := 53
 	if len(opts.Ports) > 0 {
 		txtPort = opts.Ports[0]
+		for _, p := range opts.Ports {
+			if p == 53 { // TXT passthrough is a Do53 concept — prefer 53 when scanned
+				txtPort = 53
+				break
+			}
+		}
 	}
 	res.TxtProbe = ProbeTXTUDP(ctx, ip, opts.TxtDomain, opts.Timeout, dialer, txtPort)
 	res.TxtPass = res.TxtProbe.Responded && len(res.TxtProbe.AnswerTXT) > 0

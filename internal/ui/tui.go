@@ -397,6 +397,10 @@ type tuiModel struct {
 	parsedTargetsScroll int
 	// typingEnabled controls whether keys are routed into the ASN search box.
 	typingEnabled bool
+
+	// dnsProtocol holds the transport chosen on the DNS port screen:
+	// "both" (UDP+TCP/53), "dot" (853), "doh" (443), or "all".
+	dnsProtocol string
 }
 
 // ------------------------------------------------------------
@@ -781,6 +785,8 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m, screenCmd = m.handleToggleProbeFlagsScreen(msg)
 	case screenInspectIP:
 		m, screenCmd = m.handleInspectIPScreen(msg)
+	case screenDNSPorts:
+		m, screenCmd = m.handleDNSPortsScreen(msg)
 	case screenScanResults:
 		m, screenCmd = m.handleScanResultsScreen(msg)
 	}
@@ -844,6 +850,8 @@ func (m tuiModel) View() string {
 		body = m.viewManageTLSProbe(w, h)
 	case screenInspectIP:
 		body = m.viewSimpleInput(w, h, "Inspect IP", "Enter IP address")
+	case screenDNSPorts:
+		body = m.viewDNSPorts(w, h)
 	default:
 		body = m.viewMenu(w, h)
 	}
@@ -2211,9 +2219,10 @@ func (m tuiModel) handleSelectASNScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 			m.startOperation()
 			return m, m.cmdPoolOperation(m.operationType, m.scanConfig.ASNs)
 		}
-		// DNS scan launches directly from the selected ASN networks.
+		// DNS scan uses its own transport/port picker, then launches.
 		if m.operationType == "dns_scan" {
-			return m.launchDNSScan(m.scanConfig.ASNs)
+			m.gotoDNSPorts(m.scanConfig.ASNs)
+			return m, nil
 		}
 		m.pushScreen(screenSelectPorts)
 		m.cursor = 0
@@ -2369,9 +2378,10 @@ func (m tuiModel) handleReviewTargetsScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 	switch k.String() {
 	case "enter":
 		m.addLog(fmt.Sprintf("Confirmed %d targets (%d invalid skipped)", len(m.scanConfig.Targets), len(m.parsedTargetStats.Invalid)))
-		// DNS scan needs no port/method/concurrency screens — launch directly.
+		// DNS scan uses its own transport/port picker, then launches.
 		if m.operationType == "dns_scan" {
-			return m.launchDNSScan(m.scanConfig.Targets)
+			m.gotoDNSPorts(m.scanConfig.Targets)
+			return m, nil
 		}
 		// Proceed to port selection
 		m.pushScreen(screenSelectPorts)

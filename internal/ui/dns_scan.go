@@ -13,6 +13,68 @@ import (
 	"whitedns-go/internal/tlsprobe"
 )
 
+// screenDNSPorts lets the user pick which DNS transport/ports to probe before a
+// resolver scan starts (port 53 Do53, DoT, DoH, or all).
+const screenDNSPorts = "dns_ports"
+
+// dnsPortPreset couples a menu label with the engine protocol + port set.
+type dnsPortPreset struct {
+	label    string
+	protocol string // dnsscan.Options.Protocol
+	ports    []int
+}
+
+var dnsPortPresets = []dnsPortPreset{
+	{"Port 53 - standard DNS (UDP + TCP)", "both", []int{53}},
+	{"DoT - DNS-over-TLS (853)", "all", []int{853}},
+	{"DoH - DNS-over-HTTPS (443)", "all", []int{443}},
+	{"All valid DNS ports (53 + 853 + 443)", "all", []int{53, 853, 443}},
+}
+
+// gotoDNSPorts is entered once resolver targets are chosen (from any source).
+func (m *tuiModel) gotoDNSPorts(targets []string) {
+	m.scanConfig.Targets = targets
+	m.pushScreen(screenDNSPorts)
+	m.cursor = 0
+}
+
+// handleDNSPortsScreen picks the transport preset and launches the scan.
+func (m tuiModel) handleDNSPortsScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
+	k, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return m, nil
+	}
+	switch k.String() {
+	case "up", "k":
+		if m.cursor > 0 {
+			m.cursor--
+		}
+	case "down", "j":
+		if m.cursor < len(dnsPortPresets)-1 {
+			m.cursor++
+		}
+	case "esc":
+		m.goBack()
+	case "enter":
+		p := dnsPortPresets[m.cursor]
+		m.dnsProtocol = p.protocol
+		m.scanConfig.Ports = append([]int(nil), p.ports...)
+		m.addLog(fmt.Sprintf("DNS scan transport: %s", p.label))
+		return m.launchDNSScan(m.scanConfig.Targets)
+	}
+	return m, nil
+}
+
+// viewDNSPorts renders the transport picker using the shared list style.
+func (m tuiModel) viewDNSPorts(w, h int) string {
+	items := make([]string, len(dnsPortPresets))
+	for i, p := range dnsPortPresets {
+		items[i] = p.label
+	}
+	return m.viewList(w, h, "DNS PORTS / TRANSPORT", items,
+		"↑↓ navigate  ·  Enter start scan  ·  Esc back")
+}
+
 // launchDNSScan is invoked from the shared target-selection flow (ASN / paste /
 // type / file import → review) once resolver targets are chosen. It reuses the
 // standard scanMsgCh + screenScanning + screenScanResults machinery, so the DNS
@@ -37,6 +99,16 @@ func (m tuiModel) cmdDNSScan(targets []string) tea.Cmd {
 	}
 	runCtx := m.scanCtx
 	dataDir := m.app.DataDir
+
+	// Transport + ports chosen on the DNS port screen (default: UDP+TCP/53).
+	protocol := m.dnsProtocol
+	if protocol == "" {
+		protocol = "both"
+	}
+	ports := append([]int(nil), m.scanConfig.Ports...)
+	if len(ports) == 0 {
+		ports = []int{53}
+	}
 
 	return tea.Batch(
 		func() tea.Msg {
@@ -66,7 +138,8 @@ func (m tuiModel) cmdDNSScan(targets []string) tea.Cmd {
 				TargetDomain: "google.com",
 				Timeout:      3 * time.Second,
 				Concurrency:  64,
-				Protocol:     "all",
+				Protocol:     protocol,
+				Ports:        ports,
 				TestNearby:   true,
 			}
 
