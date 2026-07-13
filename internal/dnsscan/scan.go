@@ -70,6 +70,48 @@ type ResolverResult struct {
 	TunnelReason string       // why ready / what's missing
 	BestLatency time.Duration // fastest responding probe
 	Nearby      bool          // discovered via /24 nearby-expansion pass
+	Status      string        // overall verdict: valid | poison | hijack | invalid
+	NSCount     int           // authority (NS) records seen across probes
+	ARCount     int           // additional records seen across probes
+}
+
+// Resolver status values (one per resolver, most-severe wins).
+const (
+	StatusValid   = "valid"   // responded with an honest answer
+	StatusPoison  = "poison"  // answer failed truth-table integrity
+	StatusHijack  = "hijack"  // transparent proxy / forged NXDOMAIN answer
+	StatusInvalid = "invalid" // no usable response at all
+)
+
+// classifyStatus collapses the per-resolver flags into a single state. Order of
+// precedence: no response (invalid) → forged answers (poison) → transparent
+// interception (hijack) → honest (valid).
+func classifyStatus(r ResolverResult) string {
+	switch {
+	case !r.Responded:
+		return StatusInvalid
+	case r.Poisoned:
+		return StatusPoison
+	case r.Transparent:
+		return StatusHijack
+	default:
+		return StatusValid
+	}
+}
+
+// StatusColor maps a resolver status to the report colour requested by the
+// operator: poison=purple, hijack=yellow, valid=green, invalid=red.
+func StatusColor(status string) string {
+	switch status {
+	case StatusPoison:
+		return "purple"
+	case StatusHijack:
+		return "yellow"
+	case StatusValid:
+		return "green"
+	default:
+		return "red"
+	}
 }
 
 // HeaderDump returns one "PROTO | header" line per probe (full header per probe).
@@ -207,6 +249,14 @@ func ScanResolver(ctx context.Context, ip string, opts Options, truth *TruthTabl
 			if best == 0 || p.TTFB < best {
 				best = p.TTFB
 			}
+			if p.HeaderOK {
+				if int(p.Header.NSCount) > res.NSCount {
+					res.NSCount = int(p.Header.NSCount)
+				}
+				if int(p.Header.ARCount) > res.ARCount {
+					res.ARCount = int(p.Header.ARCount)
+				}
+			}
 		}
 		if p.IsPoisoned {
 			res.Poisoned = true
@@ -226,6 +276,7 @@ func ScanResolver(ctx context.Context, ip string, opts Options, truth *TruthTabl
 
 	res.Score = computeScore(res)
 	res.TunnelReady, res.TunnelReason = classifyTunnel(res)
+	res.Status = classifyStatus(res)
 	return res
 }
 

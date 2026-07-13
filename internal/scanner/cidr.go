@@ -228,6 +228,13 @@ func ParseTargetsFromPaste(pastedText string) ParseTargetStats {
 	// Replace tabs with spaces
 	normalized = strings.ReplaceAll(normalized, "\t", " ")
 
+	// Treat commas and semicolons as record separators so targets pasted as
+	// "a,b,c" or "a; b; c" (columns, CSV rows, delimited lists) split cleanly
+	// instead of collapsing into one unparseable field. Newlines and spaces are
+	// already handled below.
+	normalized = strings.ReplaceAll(normalized, ",", "\n")
+	normalized = strings.ReplaceAll(normalized, ";", "\n")
+
 	// Split by newlines first to handle line-by-line input
 	lines := strings.Split(normalized, "\n")
 
@@ -240,13 +247,17 @@ func ParseTargetsFromPaste(pastedText string) ParseTargetStats {
 		}
 
 		// Try to fix common spacing issues: "45.92.93 112" -> "45.92.93.112"
-		// If line has exactly one space with digits on both sides, treat as malformed IP
+		// If a line has exactly one space with digits on both sides AND the two
+		// halves together make up exactly four octets, treat it as a single IP
+		// split by a stray space. Guarding on the octet count stops two genuine
+		// space-separated IPs ("1.2.3.4 5.6.7.8" => 8 octets) from being merged
+		// into a bogus "1.2.3.4.5.6.7.8".
 		if strings.Count(line, " ") == 1 && !strings.Contains(line, "/") && !strings.Contains(line, "-") {
 			parts := strings.Split(line, " ")
 			left := strings.TrimSpace(parts[0])
 			right := strings.TrimSpace(parts[1])
-			// If both parts look like IP octets, join with dot
-			if isLikelyIPOctetSequence(left) && isLikelyIPOctetSequence(right) {
+			octets := strings.Count(left, ".") + strings.Count(right, ".") + 2
+			if octets == 4 && isLikelyIPOctetSequence(left) && isLikelyIPOctetSequence(right) {
 				line = left + "." + right
 			}
 		}

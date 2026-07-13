@@ -17,6 +17,28 @@ import (
 // resolver scan starts (port 53 Do53, DoT, DoH, or all).
 const screenDNSPorts = "dns_ports"
 
+// screenDNSWorkers lets the user pick the resolver worker-pool size (scan
+// concurrency) after the transport is chosen and before the scan launches.
+const screenDNSWorkers = "dns_workers"
+
+// dnsWorkerPreset couples a menu label with a concurrency (worker count).
+type dnsWorkerPreset struct {
+	label   string
+	workers int
+}
+
+var dnsWorkerPresets = []dnsWorkerPreset{
+	{"Gentle - 16 workers (slow links / low RAM)", 16},
+	{"Low - 32 workers", 32},
+	{"Default - 64 workers", 64},
+	{"High - 128 workers", 128},
+	{"Very High - 256 workers", 256},
+	{"Max - 512 workers (fast link, may drop UDP)", 512},
+}
+
+// defaultDNSWorkers is used when the user has not visited the worker screen.
+const defaultDNSWorkers = 64
+
 // dnsPortPreset couples a menu label with the engine protocol + port set.
 type dnsPortPreset struct {
 	label    string
@@ -60,7 +82,8 @@ func (m tuiModel) handleDNSPortsScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
 		m.dnsProtocol = p.protocol
 		m.scanConfig.Ports = append([]int(nil), p.ports...)
 		m.addLog(fmt.Sprintf("DNS scan transport: %s", p.label))
-		return m.launchDNSScan(m.scanConfig.Targets)
+		m.pushScreen(screenDNSWorkers)
+		m.cursor = 2 // default to the 64-worker preset
 	}
 	return m, nil
 }
@@ -72,6 +95,42 @@ func (m tuiModel) viewDNSPorts(w, h int) string {
 		items[i] = p.label
 	}
 	return m.viewList(w, h, "DNS PORTS / TRANSPORT", items,
+		"↑↓ navigate  ·  Enter next  ·  Esc back")
+}
+
+// handleDNSWorkersScreen picks the worker-pool size and launches the scan.
+func (m tuiModel) handleDNSWorkersScreen(msg tea.Msg) (tuiModel, tea.Cmd) {
+	k, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return m, nil
+	}
+	switch k.String() {
+	case "up", "k":
+		if m.cursor > 0 {
+			m.cursor--
+		}
+	case "down", "j":
+		if m.cursor < len(dnsWorkerPresets)-1 {
+			m.cursor++
+		}
+	case "esc":
+		m.goBack()
+	case "enter":
+		p := dnsWorkerPresets[m.cursor]
+		m.dnsConcurrency = p.workers
+		m.addLog(fmt.Sprintf("DNS scan workers: %d", p.workers))
+		return m.launchDNSScan(m.scanConfig.Targets)
+	}
+	return m, nil
+}
+
+// viewDNSWorkers renders the worker-count picker using the shared list style.
+func (m tuiModel) viewDNSWorkers(w, h int) string {
+	items := make([]string, len(dnsWorkerPresets))
+	for i, p := range dnsWorkerPresets {
+		items[i] = p.label
+	}
+	return m.viewList(w, h, "DNS SCAN WORKERS", items,
 		"↑↓ navigate  ·  Enter start scan  ·  Esc back")
 }
 
@@ -80,10 +139,15 @@ func (m tuiModel) viewDNSPorts(w, h int) string {
 // standard scanMsgCh + screenScanning + screenScanResults machinery, so the DNS
 // feature behaves exactly like the other scans.
 func (m tuiModel) launchDNSScan(targets []string) (tuiModel, tea.Cmd) {
+	workers := m.dnsConcurrency
+	if workers <= 0 {
+		workers = defaultDNSWorkers
+	}
+	m.dnsConcurrency = workers
 	m.startOperation() // pushes screenScanning + fresh scanCtx/counters
 	m.scanMsgCh = make(chan tea.Msg, 65536)
-	m.startScanLogFile("dnsscan", targets, nil, 64, 3*time.Second)
-	m.addLog(fmt.Sprintf("Starting DNS resolver/tunnel scan: targets=%d", len(targets)))
+	m.startScanLogFile("dnsscan", targets, nil, workers, 3*time.Second)
+	m.addLog(fmt.Sprintf("Starting DNS resolver/tunnel scan: targets=%d workers=%d", len(targets), workers))
 	return m, m.cmdDNSScan(targets)
 }
 
@@ -108,6 +172,11 @@ func (m tuiModel) cmdDNSScan(targets []string) tea.Cmd {
 	ports := append([]int(nil), m.scanConfig.Ports...)
 	if len(ports) == 0 {
 		ports = []int{53}
+	}
+
+	workers := m.dnsConcurrency
+	if workers <= 0 {
+		workers = defaultDNSWorkers
 	}
 
 	return tea.Batch(
@@ -137,7 +206,7 @@ func (m tuiModel) cmdDNSScan(targets []string) tea.Cmd {
 			opts := dnsscan.Options{
 				TargetDomain: "google.com",
 				Timeout:      3 * time.Second,
-				Concurrency:  64,
+				Concurrency:  workers,
 				Protocol:     protocol,
 				Ports:        ports,
 				TestNearby:   true,
@@ -206,7 +275,7 @@ func (m tuiModel) cmdDNSScan(targets []string) tea.Cmd {
 				trySend(logMsg{text: "[DNS] report write failed: " + err.Error()})
 			} else {
 				trySend(logMsg{text: "[DNS] reports written to " + paths.Dir})
-				trySend(logMsg{text: "    " + filepath.Base(paths.Full) + " / " + filepath.Base(paths.CSV) + " / " + filepath.Base(paths.JSON)})
+				trySend(logMsg{text: "    " + filepath.Base(paths.Full) + " / " + filepath.Base(paths.CSV) + " / " + filepath.Base(paths.HTML) + " / " + filepath.Base(paths.JSON)})
 			}
 
 			// Build the on-screen shortlist (tunnel-ready, best score first).

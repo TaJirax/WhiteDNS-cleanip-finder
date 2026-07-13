@@ -401,6 +401,9 @@ type tuiModel struct {
 	// dnsProtocol holds the transport chosen on the DNS port screen:
 	// "both" (UDP+TCP/53), "dot" (853), "doh" (443), or "all".
 	dnsProtocol string
+	// dnsConcurrency is the resolver worker-pool size chosen on the DNS worker
+	// screen (0 => defaultDNSWorkers).
+	dnsConcurrency int
 }
 
 // ------------------------------------------------------------
@@ -787,6 +790,8 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m, screenCmd = m.handleInspectIPScreen(msg)
 	case screenDNSPorts:
 		m, screenCmd = m.handleDNSPortsScreen(msg)
+	case screenDNSWorkers:
+		m, screenCmd = m.handleDNSWorkersScreen(msg)
 	case screenScanResults:
 		m, screenCmd = m.handleScanResultsScreen(msg)
 	}
@@ -852,6 +857,8 @@ func (m tuiModel) View() string {
 		body = m.viewSimpleInput(w, h, "Inspect IP", "Enter IP address")
 	case screenDNSPorts:
 		body = m.viewDNSPorts(w, h)
+	case screenDNSWorkers:
+		body = m.viewDNSWorkers(w, h)
 	default:
 		body = m.viewMenu(w, h)
 	}
