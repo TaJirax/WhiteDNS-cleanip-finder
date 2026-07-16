@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <strong>Desktop 1.3 and Android 1.3.4 clean-IP scanner, proxy checker, ASN target expander, and WhiteDNS toolkit.</strong>
+  <strong>Desktop 1.3.6 and Android 1.3.6 clean-IP scanner, proxy checker, ASN target expander, and WhiteDNS toolkit.</strong>
 </p>
 
 <p align="center">
@@ -22,8 +22,8 @@
 
 | Release | Platform | What You Get | Best For |
 |---|---|---|---|
-| **WhiteDNS Desktop 1.3** | Windows, Linux, macOS, Termux | Terminal UI, proxy tools, scanner engine, config workflows, cross-platform binaries | Power users, desktop scanning, bulk workflows |
-| **WhiteDNS IP Scanner Android 1.3.4** | Android API 21+ | Native Android app, IP/CIDR scanner, SNI scanner, HTTP/SOCKS5 proxy scanner, ASN export, signed APK/AAB outputs | Phone-based scanning and portable clean-IP discovery |
+| **WhiteDNS Desktop 1.3.6** | Windows, Linux, macOS, Termux | Terminal UI, proxy tools, scanner engine, config workflows, cross-platform binaries | Power users, desktop scanning, bulk workflows |
+| **WhiteDNS IP Scanner Android 1.3.6** | Android API 21+ | Native Android app, IP/CIDR scanner, SNI scanner, HTTP/SOCKS5 proxy scanner, ASN export, signed APK/AAB outputs | Phone-based scanning and portable clean-IP discovery |
 
 Download the latest files from the **GitHub Releases** page:
 
@@ -40,15 +40,16 @@ WhiteDNS is a clean-IP discovery and proxy workflow toolkit. It expands IP range
 ### Key Features
 
 - Native Go scanner engine with CIDR expansion, concurrency control, pause/resume, stop, progress, and result export.
+- DNS resolver scanner for UDP, TCP, DoT, and DoH, with browser-style uTLS handshakes for encrypted DNS probes, poisoning/hijack checks, TXT passthrough tests, and TXT/CSV/JSON/XLSX reports.
 - Desktop terminal UI for scanning, routing, DPI/desync-related workflows, config tools, and proxy operations.
-- Android app with IP/CIDR scan, SNI scan, HTTP proxy scan, SOCKS5 scan, ASN export, foreground service scanning, and storage export.
+- Android app with IP/CIDR scan, DNS resolver scan, SNI scan, HTTP proxy scan, SOCKS5 scan, ASN export, foreground service scanning, and storage export.
 - ASN-aware target handling using embedded datasets.
 - Standalone desktop builds with embedded runtime assets.
 - Android multi-ABI builds: `armeabi-v7a`, `arm64-v8a`, `x86`, `x86_64`, universal APK, and release AAB.
 
 ---
 
-## Desktop 1.3 Guide
+## Desktop 1.3.6 Guide
 
 ### Download
 
@@ -132,13 +133,15 @@ Proxy-only mode (macOS/Linux):
 ### Desktop Notes
 
 - Results and logs are written beside the executable in WhiteDNS output folders.
+- DNS scans can probe port 53 over UDP/TCP, port 853 over DoT, and port 443 over DoH. DoT and DoH use a Chrome-style uTLS ClientHello to reduce TLS-fingerprint blocking while preserving the protocol-specific ALPN behavior.
+- DNS reports are written to the `dns scan` folder in text, CSV, JSON, and XLSX formats.
 - ASN datasets and Cloudflare domain assets are embedded in the binary.
 - Use the TUI for the full workflow experience.
 - Use proxy mode when you only need the local proxy/tunnel behavior.
 
 ---
 
-## Android 1.3.4 Guide
+## Android 1.3.6 Guide
 
 ### Download
 
@@ -163,6 +166,7 @@ From **Releases**, download one of the Android artifacts:
 ### Android Features
 
 - IP / CIDR Scan
+- DNS Resolver Scan (UDP, TCP, DoT, and DoH with uTLS)
 - SNI Scanner
 - HTTP Proxy Scan
 - SOCKS5 Scan

@@ -31,6 +31,11 @@ data class FormState(
     val dnsProtocol: String = "both",     // dnsscan.Options.Protocol: udp | tcp | both | all
     val dnsReference: String = "google",  // truth-table reference resolver
     val dnsTestNearby: Boolean = false,   // expand + rescan the /24 around tunnel-ready hits
+    // DNSTT end-to-end tunnel test — runs after a DNS scan on its tunnel-ready shortlist.
+    val e2eEnabled: Boolean = false,
+    val e2eDomain: String = "",
+    val e2ePubKey: String = "",
+    val e2eTransport: String = "udp",     // udp | tcp (both working) | dot | doh (gated)
 )
 
 // Common single ports offered as checkboxes (multi-select). Ranges / anything
@@ -80,6 +85,17 @@ private val DNS_REFERENCE_PRESETS = listOf(
     DnsReferencePreset("Google Public DNS - 8.8.8.8 (default)", "google"),
     DnsReferencePreset("Cloudflare - 1.1.1.1", "cloudflare"),
     DnsReferencePreset("Quad9 - 9.9.9.9", "quad9"),
+)
+
+// DNSTT end-to-end transport presets. UDP/53 and TCP/53 are wired up (TCP reaches
+// servers where UDP/53 is poisoned); dnstt's DoT/DoH aren't vendored yet, so
+// those chips are shown but disabled so the option set is clear without misleading.
+private data class E2ETransportPreset(val label: String, val value: String, val enabled: Boolean)
+private val E2E_TRANSPORT_PRESETS = listOf(
+    E2ETransportPreset("UDP", "udp", enabled = true),
+    E2ETransportPreset("TCP", "tcp", enabled = true),
+    E2ETransportPreset("DoT", "dot", enabled = false),
+    E2ETransportPreset("DoH", "doh", enabled = false),
 )
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
@@ -223,6 +239,66 @@ fun ScanConfigForm(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
+                }
+
+                // ── DNSTT end-to-end test (runs after this DNS scan) ──────────
+                Spacer(Modifier.height(16.dp))
+                HorizontalDivider()
+                Spacer(Modifier.height(12.dp))
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Switch(
+                        checked = form.e2eEnabled,
+                        onCheckedChange = { onFormChange(form.copy(e2eEnabled = it)) },
+                    )
+                    Column {
+                        Text("End-to-end tunnel test", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            "After the DNS scan, bring up a real DNSTT tunnel through each tunnel-ready resolver and keep only the ones that carry traffic",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+
+                if (form.e2eEnabled) {
+                    Spacer(Modifier.height(10.dp))
+                    OutlinedTextField(
+                        value = form.e2eDomain,
+                        onValueChange = { onFormChange(form.copy(e2eDomain = it)) },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("DNSTT domain") },
+                        placeholder = { Text("t.example.com") },
+                        singleLine = true,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = form.e2ePubKey,
+                        onValueChange = { onFormChange(form.copy(e2ePubKey = it)) },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("DNSTT public key (hex)") },
+                        placeholder = { Text("64 hex chars") },
+                        singleLine = true,
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    Text("Transport", style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.height(4.dp))
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        E2E_TRANSPORT_PRESETS.forEach { preset ->
+                            FilterChip(
+                                selected = form.e2eTransport == preset.value,
+                                enabled = preset.enabled,
+                                onClick = { onFormChange(form.copy(e2eTransport = preset.value)) },
+                                label = { Text(preset.label) },
+                                modifier = Modifier.height(36.dp),
+                            )
+                        }
+                    }
+                    Text(
+                        "UDP and TCP are available (TCP helps where UDP/53 is poisoned) — DoT/DoH are coming soon",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
         }

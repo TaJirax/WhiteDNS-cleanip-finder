@@ -18,6 +18,8 @@ import (
 	"whitedns-go/internal/asn"
 	"whitedns-go/internal/asnexport"
 	"whitedns-go/internal/dnsscan"
+	"whitedns-go/internal/dnstt"
+	"whitedns-go/internal/e2e"
 	"whitedns-go/internal/scanner"
 	"whitedns-go/internal/tlsprobe"
 )
@@ -225,6 +227,11 @@ func appendTargetsFromFile(out *[]string, path string, depth int) {
 	for fileScanner.Scan() {
 		appendTargetLine(out, fileScanner.Text(), depth)
 	}
+	// Best-effort target-file reader with no caller-visible error channel (see
+	// splitTargets/ExpandASNs callers); a read error here just means the target
+	// list is truncated to whatever was read before it, which is already this
+	// function's documented behavior for malformed lines.
+	_ = fileScanner.Err()
 }
 
 func parsePortsCSV(portStr string) []int {
@@ -577,6 +584,11 @@ func StartIPScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 		}
 		if !h.isStopped() {
 			runChunk(chunk) // final partial chunk
+		}
+		if err := fileScanner.Err(); err != nil {
+			warnMsg := "[IP-SCAN] staged-IP read error, coverage may be truncated: " + err.Error()
+			lf.write(warnMsg)
+			l.OnLog(warnMsg)
 		}
 
 		// Whether the scan finished or was stopped, partial results are already on
@@ -1044,6 +1056,9 @@ func runLiteSNIScan(dataDir string, cfg *ScanConfig, l ScanListener, h *ScanHand
 	if !h.isStopped() {
 		runChunk(chunk)
 	}
+	if err := fileScanner.Err(); err != nil {
+		l.OnLog("[SNI-LITE] staged-IP read error, coverage may be truncated: " + err.Error())
+	}
 
 	reason := "completed"
 	if h.isStopped() {
@@ -1332,6 +1347,11 @@ func StartDNSScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 		if !h.isStopped() {
 			runChunk(chunk)
 		}
+		if err := fileScanner.Err(); err != nil {
+			warnMsg := "[DNS-SCAN] staged resolver-IP read error, coverage may be truncated: " + err.Error()
+			lf.write(warnMsg)
+			l.OnLog(warnMsg)
+		}
 
 		// Test Nearby IPs: expand the /24 around each tunnel-ready resolver and
 		// rescan the addresses not already tried (desktop TUI parity). Forced off
@@ -1345,6 +1365,11 @@ func StartDNSScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 					if t := strings.TrimSpace(sc2.Text()); t != "" {
 						scanned[t] = struct{}{}
 					}
+				}
+				if err := sc2.Err(); err != nil {
+					// Only affects dedup: a partial "already scanned" set means a few
+					// addresses might be redundantly rescanned below, never dropped.
+					l.OnLog("[DNS-NEARBY] dedup read error (may rescan a few addresses): " + err.Error())
 				}
 				file2.Close()
 			}
@@ -1406,6 +1431,167 @@ func StartDNSScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 		l.OnDone(lastSavedPath, "")
 	}()
 	return h
+}
+
+// ── DNSTT end-to-end tunnel test ─────────────────────────────────────────────
+
+// e2eTransportSupported reports whether the requested E2E transport is wired up.
+// UDP/53 and TCP/53 are implemented; dot/doh are accepted by the UI (gated) but
+// rejected here so the backend can never attempt an unimplemented transport.
+func e2eTransportSupported(transport string) bool {
+	switch strings.ToLower(strings.TrimSpace(transport)) {
+	case "", "udp", "tcp":
+		return true
+	default:
+		return false
+	}
+}
+
+// e2eTransportOption maps a transport string to the engine transport.
+func e2eTransportOption(transport string) e2e.Transport {
+	if strings.ToLower(strings.TrimSpace(transport)) == "tcp" {
+		return e2e.TransportTCP
+	}
+	return e2e.TransportUDP
+}
+
+// StartE2EScan validates a resolver shortlist end-to-end by bringing up a real
+// DNSTT tunnel through each resolver against the operator's DNSTT server
+// (cfg.E2EDomain + cfg.E2EPubKey) and fetching cfg.E2EURL over it. cfg.Targets
+// holds the resolver list (one per line — typically the tunnel-ready shortlist
+// from a prior DNS scan). Only resolvers that carry an HTTP 2xx/3xx round-trip
+// are reported as passed. Results/logs stream via the listener exactly like the
+// other scans, and the passed resolver IPs are written to disk.
+func StartE2EScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
+	if cfg == nil {
+		cfg = &ScanConfig{}
+	}
+	h := newScanHandle(nil)
+
+	domain := strings.TrimSpace(cfg.E2EDomain)
+	transport := strings.ToLower(strings.TrimSpace(cfg.E2ETransport))
+	if transport == "" {
+		transport = "udp"
+	}
+	resolvers := splitTargets(cfg.Targets)
+
+	liteMode := effectiveLiteMode(cfg)
+	conc := concurrencyOrDefault(cfg.Concurrency, 4)
+	// Tunnel setup is heavy; keep concurrency modest and lower still on weak devices.
+	if conc > 8 {
+		conc = 8
+	}
+	if liteMode && conc > 2 {
+		conc = 2
+	}
+	timeout := timeoutOrDefault(cfg.TimeoutMs, 20*time.Second, cfg.LowBandwidth)
+
+	go func() {
+		if domain == "" {
+			l.OnDone("", "no DNSTT domain provided")
+			return
+		}
+		if !e2eTransportSupported(transport) {
+			l.OnDone("", fmt.Sprintf("transport %q not yet supported (UDP only for now)", transport))
+			return
+		}
+		if len(resolvers) == 0 {
+			l.OnDone("", "no resolvers to test")
+			return
+		}
+
+		opts := e2e.Options{
+			Domain:      domain,
+			PubKey:      strings.TrimSpace(cfg.E2EPubKey),
+			Transport:   e2eTransportOption(transport),
+			Timeout:     timeout,
+			Concurrency: conc,
+			E2EURL:      strings.TrimSpace(cfg.E2EURL),
+		}
+
+		lf := openLogFile(dataDir, "e2e")
+		logThrottle := newThrottle(250 * time.Millisecond)
+		resultThrottle := newThrottle(250 * time.Millisecond)
+		start := time.Now()
+		total := len(resolvers)
+
+		startMsg := fmt.Sprintf("[E2E-START] resolvers=%d domain=%s transport=%s key=%v concurrency=%d",
+			total, domain, transport, opts.PubKey != "", conc)
+		lf.write(startMsg)
+		l.OnLog(startMsg)
+
+		var passed int
+		progress := func(done, tot int, r e2e.Result) {
+			if h.isStopped() {
+				return
+			}
+			line := fmt.Sprintf("%-21s %-4s %s", r.Resolver, boolYN(r.OK), r.Reason)
+			lf.write(line)
+			if r.OK {
+				passed++
+				if resultThrottle.allow() {
+					l.OnResult(r.Resolver)
+				}
+			}
+			if logThrottle.allow() {
+				l.OnLog(line)
+			}
+			l.OnProgress(done, tot, passed, total, r.Resolver, calcETA(start, done, tot))
+		}
+
+		results := e2e.Run(h.ctx, resolvers, opts, dnstt.NewValidator(), progress)
+
+		// Persist the passed (end-to-end validated) resolvers as a clean list.
+		rf, _ := openResultFile(dataDir, "e2e")
+		for _, r := range e2e.PassedResolvers(results) {
+			rf.write(r)
+		}
+		rf.flush()
+
+		reason := "completed"
+		if h.isStopped() {
+			reason = "stopped"
+		}
+		endMsg := fmt.Sprintf("[E2E-END] reason=%s tested=%d passed=%d elapsed=%s",
+			reason, total, passed, time.Since(start).Round(time.Second))
+		lf.write(endMsg)
+		l.OnLog(endMsg)
+		lf.close()
+
+		l.OnDone(rf.close(), "")
+	}()
+	return h
+}
+
+func boolYN(v bool) string {
+	if v {
+		return "PASS"
+	}
+	return "fail"
+}
+
+// TunnelReadyIPsPath derives the clean tunnel-ready IP list written alongside a
+// DNS scan report. dnsReportPath is the savedPath a DNS scan returned via
+// OnDone (…/dns_scan_<ts>.txt); the companion list is …/tunnel_ready_ips_<ts>.txt
+// in the same folder. Returns the list path if it exists and is non-empty (so
+// an E2E test can be chained with Targets="@"+path), otherwise "". Callers must
+// treat "" as "no tunnel-ready resolvers to test".
+func TunnelReadyIPsPath(dnsReportPath string) string {
+	dnsReportPath = strings.TrimSpace(dnsReportPath)
+	if dnsReportPath == "" {
+		return ""
+	}
+	dir := filepath.Dir(dnsReportPath)
+	base := filepath.Base(dnsReportPath)
+	if !strings.HasPrefix(base, "dns_scan_") {
+		return ""
+	}
+	candidate := filepath.Join(dir, "tunnel_ready_ips_"+strings.TrimPrefix(base, "dns_scan_"))
+	info, err := os.Stat(candidate)
+	if err != nil || info.Size() == 0 {
+		return ""
+	}
+	return candidate
 }
 
 // ── ASN export & search ──────────────────────────────────────────────────────

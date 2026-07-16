@@ -2,7 +2,6 @@ package dnsscan
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -101,7 +100,7 @@ func ProbeDoT(ctx context.Context, resolverIP, domain string, truth *TruthTable,
 	if dialer == nil {
 		dialer = &net.Dialer{Timeout: timeout}
 	}
-	tlsConn, err := tls.DialWithDialer(dialer, "tcp", addr, &tls.Config{InsecureSkipVerify: true})
+	tlsConn, err := dialUTLS(ctx, "tcp", addr, dialer, nil)
 	if err != nil {
 		result.Error = "DoT_TLS: " + truncErr(err)
 		return result
@@ -304,7 +303,7 @@ func readTCPResponse(conn net.Conn) ([]byte, error) {
 // doDoHQuery performs a DoH JSON query and returns the decoded response + TTFB.
 func doDoHQuery(ctx context.Context, resolverIP, name, qtype string, timeout time.Duration, client *http.Client, port int) (dohJSONResponse, time.Duration, error) {
 	if client == nil {
-		client = &http.Client{Timeout: timeout}
+		client = newDoHClient(timeout, nil)
 	}
 	url := fmt.Sprintf("https://%s:%d/dns-query?name=%s&type=%s", resolverIP, port, name, qtype)
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)

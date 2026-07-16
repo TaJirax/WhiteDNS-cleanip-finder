@@ -558,6 +558,9 @@ func parseMasscanOutputStreaming(filepath string, targetPorts []int) ([]string, 
 			}
 		}
 	}
+	if err := scanner.Err(); err != nil {
+		fmt.Printf("[!] Warning: masscan output read error (results may be truncated): %v\n", err)
+	}
 
 	return deduplicateEndpoints(endpoints), parsed
 }
@@ -620,6 +623,9 @@ func parseNmapOutputStreaming(filepath string, targetPorts []int) ([]string, int
 				}
 			}
 		}
+	}
+	if err := scanner.Err(); err != nil {
+		fmt.Printf("[!] Warning: nmap output read error (results may be truncated): %v\n", err)
 	}
 
 	return deduplicateEndpoints(endpoints), parsed

@@ -17,14 +17,15 @@ import (
 
 // ReportPaths lists the files written by WriteReports.
 type ReportPaths struct {
-	Dir         string
-	Full        string // human-readable per-resolver + header dump
-	TunnelReady string // tunnel-ready shortlist
-	Passed      string // plain IP list of clean (valid) resolvers, one per line
-	CSV         string
-	HTML        string // colour-coded per-status table (opens in browser/Excel)
-	XLSX        string // real spreadsheet with per-status cell fills
-	JSON        string
+	Dir            string
+	Full           string // human-readable per-resolver + header dump
+	TunnelReady    string // tunnel-ready shortlist (human-readable)
+	TunnelReadyIPs string // plain IP list of tunnel-ready resolvers, one per line (E2E input)
+	Passed         string // plain IP list of clean (valid) resolvers, one per line
+	CSV            string
+	HTML           string // colour-coded per-status table (opens in browser/Excel)
+	XLSX           string // real spreadsheet with per-status cell fills
+	JSON           string
 }
 
 // statusCounts tallies how many resolvers landed in each state.
@@ -65,6 +66,10 @@ func WriteReports(dir string, results []ResolverResult) (ReportPaths, error) {
 	if err := writeTunnelReport(paths.TunnelReady, sorted); err != nil {
 		return paths, err
 	}
+	paths.TunnelReadyIPs = filepath.Join(dir, fmt.Sprintf("tunnel_ready_ips_%s.txt", ts))
+	if err := writeTunnelReadyIPList(paths.TunnelReadyIPs, sorted); err != nil {
+		return paths, err
+	}
 	paths.Passed = filepath.Join(dir, fmt.Sprintf("passed_clean_resolvers_%s.txt", ts))
 	if err := writePassedList(paths.Passed, sorted); err != nil {
 		return paths, err
@@ -96,7 +101,8 @@ func writeFullReport(path string, results []ResolverResult) error {
 		c[StatusValid], c[StatusPoison], c[StatusHijack], c[StatusInvalid])
 	b.WriteString("Score 0-6 = UDP + TCP + RA + EDNS0 + TXT-passthrough + answer-integrity\n")
 	b.WriteString("Header fields per probe: qr/aa/tc/rd/ra flags, rcode, and qd/an/ns/ar section counts.\n")
-	b.WriteString(strings.Repeat("=", 90) + "\n")
+	b.WriteString(strings.Repeat("=", 90))
+	b.WriteString("\n")
 	for _, r := range results {
 		fmt.Fprintf(&b, "\n%-21s [%s] score=%d/6 tunnel=%s poison=%v hijack=%v %dms\n",
 			r.IP, strings.ToUpper(r.Status), r.Score, ynb(r.TunnelReady), r.Poisoned, r.Transparent, r.BestLatency.Milliseconds())
@@ -109,7 +115,7 @@ func writeFullReport(path string, results []ResolverResult) error {
 			fmt.Fprintf(&b, "    HIJACK forged A for nonexistent name -> %s\n", r.HijackIP)
 		}
 		for _, hd := range r.HeaderDump() {
-			b.WriteString("    " + hd + "\n")
+			fmt.Fprintf(&b, "    %s\n", hd)
 		}
 	}
 	return os.WriteFile(path, []byte(b.String()), 0o644)
@@ -119,7 +125,8 @@ func writeTunnelReport(path string, results []ResolverResult) error {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Tunnel-Ready DNS Resolvers\nGenerated: %s\n", time.Now().Format("2006-01-02 15:04:05"))
 	b.WriteString("Criteria: open recursion (RA) + EDNS0 large-payload + TXT passthrough\n")
-	b.WriteString(strings.Repeat("=", 70) + "\n")
+	b.WriteString(strings.Repeat("=", 70))
+	b.WriteString("\n")
 	count := 0
 	for _, r := range results {
 		if !r.TunnelReady {
@@ -140,7 +147,22 @@ func writePassedList(path string, results []ResolverResult) error {
 	var b strings.Builder
 	for _, r := range results {
 		if r.Status == StatusValid {
-			b.WriteString(r.IP + "\n")
+			b.WriteString(r.IP)
+			b.WriteString("\n")
+		}
+	}
+	return os.WriteFile(path, []byte(b.String()), 0o644)
+}
+
+// writeTunnelReadyIPList dumps just the IPs of tunnel-ready resolvers — one per
+// line, no headers — so the shortlist can be fed directly into the DNSTT
+// end-to-end test (StartE2EScan / the TUI E2E flow) as clean targets.
+func writeTunnelReadyIPList(path string, results []ResolverResult) error {
+	var b strings.Builder
+	for _, r := range results {
+		if r.TunnelReady {
+			b.WriteString(r.IP)
+			b.WriteString("\n")
 		}
 	}
 	return os.WriteFile(path, []byte(b.String()), 0o644)

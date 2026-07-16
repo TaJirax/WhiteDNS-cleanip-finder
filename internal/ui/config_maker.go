@@ -112,7 +112,8 @@ func (m tuiModel) viewConfigMaker(w, h int) string {
 			}
 			body.WriteString("\n")
 		}
-		body.WriteString("  " + m.ti.View())
+		body.WriteString("  ")
+		body.WriteString(m.ti.View())
 		panel := panelStyle(cBorderActive).Width(inner).Render(
 			sHeader.Render(" CONFIG MAKER - SOURCE INPUT ") + "\n\n" + body.String(),
 		)
@@ -129,7 +130,8 @@ func (m tuiModel) viewConfigMaker(w, h int) string {
 		body.WriteString("\n")
 		body.WriteString(configMakerRenderList(items, m.cursor, visibleRows))
 		if len(files) == 0 {
-			body.WriteString("\n" + sWarn.Render("  No TXT files found in config maker folder"))
+			body.WriteString("\n")
+			body.WriteString(sWarn.Render("  No TXT files found in config maker folder"))
 		}
 		panel := panelStyle(cBorderActive).Width(inner).Render(
 			sHeader.Render(" CONFIG MAKER - SOURCE FILE ") + "\n\n" + body.String(),
@@ -180,7 +182,8 @@ func (m tuiModel) viewConfigMaker(w, h int) string {
 			}
 			body.WriteString("\n")
 		}
-		body.WriteString("  " + m.ti.View())
+		body.WriteString("  ")
+		body.WriteString(m.ti.View())
 		panel := panelStyle(cBorderActive).Width(inner).Render(
 			sHeader.Render(" CONFIG MAKER - TARGET INPUT ") + "\n\n" + body.String(),
 		)
@@ -197,7 +200,8 @@ func (m tuiModel) viewConfigMaker(w, h int) string {
 		body.WriteString("\n")
 		body.WriteString(configMakerRenderList(items, m.cursor, visibleRows))
 		if len(files) == 0 {
-			body.WriteString("\n" + sWarn.Render("  No TXT files found in config maker folder"))
+			body.WriteString("\n")
+			body.WriteString(sWarn.Render("  No TXT files found in config maker folder"))
 		}
 		panel := panelStyle(cBorderActive).Width(inner).Render(
 			sHeader.Render(" CONFIG MAKER - TARGET FILE ") + "\n\n" + body.String(),
@@ -232,7 +236,8 @@ func (m tuiModel) viewConfigMaker(w, h int) string {
 		body.WriteString(cmLine(sDim, "  Default: "+def))
 		body.WriteString(cmLine(sDim, "  Tip: filename-only path is saved in the config maker folder"))
 		body.WriteString("\n")
-		body.WriteString("  " + m.ti.View())
+		body.WriteString("  ")
+		body.WriteString(m.ti.View())
 		panel := panelStyle(cBorderActive).Width(inner).Render(
 			sHeader.Render(" CONFIG MAKER - OUTPUT ") + "\n\n" + body.String(),
 		)
@@ -642,13 +647,15 @@ func configMakerRenderList(items []string, cursor, visibleRows int) string {
 	var rows strings.Builder
 	for i := start; i < end; i++ {
 		if i == cursor {
-			rows.WriteString(sSelected.Render(items[i]) + "\n")
+			rows.WriteString(sSelected.Render(items[i]))
 		} else {
-			rows.WriteString(sNormal.Render(items[i]) + "\n")
+			rows.WriteString(sNormal.Render(items[i]))
 		}
+		rows.WriteString("\n")
 	}
 	if len(items) > visibleRows {
-		rows.WriteString(sDim.Render(fmt.Sprintf("  [%d/%d]", cursor+1, len(items))) + "\n")
+		rows.WriteString(sDim.Render(fmt.Sprintf("  [%d/%d]", cursor+1, len(items))))
+		rows.WriteString("\n")
 	}
 	return rows.String()
 }
@@ -687,7 +694,8 @@ func configMakerRenderReviewList(items []string, cursor, visibleRows int) string
 		}
 	}
 	if len(items) > visibleRows {
-		rows.WriteString(sDim.Render(fmt.Sprintf("  [%d/%d]", cursor+1, len(items))) + "\n")
+		rows.WriteString(sDim.Render(fmt.Sprintf("  [%d/%d]", cursor+1, len(items))))
+		rows.WriteString("\n")
 	}
 	return rows.String()
 }

@@ -138,9 +138,33 @@ class MainActivity : ComponentActivity() {
                 var form by remember { mutableStateOf(defaultFormState()) }
                 val scanState by vm.state.collectAsStateWithLifecycle()
 
-                // Auto-advance to results when scan finishes
+                // Auto-advance to results when scan finishes. When a DNS scan with
+                // the end-to-end test enabled finishes, chain straight into an E2E
+                // test over the tunnel-ready shortlist it just wrote, instead of
+                // stopping at the DNS results.
                 LaunchedEffect(scanState.done) {
                     if (scanState.done && screen is Screen.Scanning) {
+                        val finishedKind = (screen as Screen.Scanning).kind
+                        if (finishedKind == ScanKind.DNS && form.e2eEnabled) {
+                            val trPath = scanState.savedPath?.let {
+                                try { Mobile.tunnelReadyIPsPath(it) } catch (_: Throwable) { null }
+                            }
+                            if (!trPath.isNullOrEmpty()) {
+                                try {
+                                    val dir = currentScanDir().absolutePath
+                                    val e2eCfg = form.copy(targets = "@$trPath")
+                                        .toEngineConfig(shouldUseConstrainedScanDefaults())
+                                    stopForegroundScanService()
+                                    screen = Screen.Scanning(ScanKind.E2E)
+                                    startForegroundScanService(ScanKind.E2E)
+                                    vm.start(ScanKind.E2E, dir, e2eCfg)
+                                    return@LaunchedEffect
+                                } catch (e: Throwable) {
+                                    Log.e("MainActivity", "Failed to start E2E test", e)
+                                    // Fall through to showing the DNS results below.
+                                }
+                            }
+                        }
                         screen = Screen.Results
                         stopForegroundScanService()
                         // Kick off preview load immediately
@@ -357,6 +381,7 @@ private fun ScanKind.label() = when (this) {
     ScanKind.SOCKS5     -> "SOCKS5"
     ScanKind.SPEED      -> "Speed & Loss"
     ScanKind.DNS        -> "DNS Resolver Scan"
+    ScanKind.E2E        -> "E2E Tunnel Test"
     ScanKind.ASN_EXPORT -> "ASN Export"
 }
 
@@ -382,5 +407,8 @@ private fun FormState.toEngineConfig(constrainedDevice: Boolean = false): ScanCo
     cfg.setDNSProtocol(dnsProtocol)
     cfg.setDNSReference(dnsReference)
     cfg.setDNSTestNearby(dnsTestNearby && !effectiveLiteMode)
+    cfg.setE2EDomain(e2eDomain.trim())
+    cfg.setE2EPubKey(e2ePubKey.trim())
+    cfg.setE2ETransport(e2eTransport.trim())
     return cfg
 }

@@ -2,6 +2,7 @@ package tlsprobe
 
 import (
 	"bufio"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -49,6 +50,9 @@ func LoadCustom(dataDir string) []string {
 		}
 		seen[line] = struct{}{}
 		out = append(out, line)
+	}
+	if err := scanner.Err(); err != nil {
+		fmt.Printf("[!] Warning: could not fully read %s: %v\n", path, err)
 	}
 	sort.Strings(out)
 	return out

@@ -21,7 +21,7 @@ private const val MAX_LIVE_RESULTS = 50   // recent hits shown on scanning scree
 private const val MAX_LOG_LINES    = 50   // recent log lines shown on scanning screen
 private const val PREVIEW_LINES    = 100  // lines loaded from file for results screen
 
-enum class ScanKind { IP, SNI, HTTP, SOCKS5, SPEED, DNS, ASN_EXPORT }
+enum class ScanKind { IP, SNI, HTTP, SOCKS5, SPEED, DNS, E2E, ASN_EXPORT }
 
 data class ScanUiState(
     val running: Boolean        = false,
@@ -73,6 +73,7 @@ class ScanViewModel : ViewModel(), ScanListener {
             ScanKind.SOCKS5 -> Mobile.startSOCKS5Scan(dataDir, cfg, this)
             ScanKind.SPEED  -> Mobile.startSpeedRankScan(dataDir, cfg, this)
             ScanKind.DNS    -> Mobile.startDNSScan(dataDir, cfg, this)
+            ScanKind.E2E    -> Mobile.startE2EScan(dataDir, cfg, this)
         }
     }
 

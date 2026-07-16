@@ -102,7 +102,7 @@ func renderMenuTitle(width int, logs int) string {
 	meta := sDim.Render(fmt.Sprintf("logs:%d  %s", logs, time.Now().Format("15:04:05")))
 
 	if width < 72 {
-		line := renderGradientText("WHITEDNS v1.3", brandColors, true)
+		line := renderGradientText("WHITEDNS v1.3.6", brandColors, true)
 		credit := renderGradientText("developed by TAjirax", devColors, false)
 		return lipgloss.PlaceHorizontal(width, lipgloss.Center, line) + "\n" +
 			lipgloss.PlaceHorizontal(width, lipgloss.Center, credit) + "\n" +
@@ -131,7 +131,7 @@ func renderMenuTitle(width int, logs int) string {
 		out.WriteString(lipgloss.PlaceHorizontal(width, lipgloss.Center, renderGradientText(line, brandColors, true)))
 		out.WriteString("\n")
 	}
-	tagline := renderGradientText("v1.3  -  developed by TAjirax", devColors, true)
+	tagline := renderGradientText("v1.3.6  -  developed by TAjirax", devColors, true)
 	out.WriteString(lipgloss.PlaceHorizontal(width, lipgloss.Center, tagline))
 	out.WriteString("\n")
 	out.WriteString(lipgloss.PlaceHorizontal(width, lipgloss.Center, meta))
@@ -420,6 +420,14 @@ type tuiModel struct {
 	// dnsReference is the trusted reference resolver used to build the truth
 	// table ("google" default | "cloudflare"), chosen on the DNS reference screen.
 	dnsReference string
+
+	// DNSTT end-to-end tunnel test (offered after a DNS scan). e2eShortlist holds
+	// the clean tunnel-ready resolver IPs captured from the finished DNS scan;
+	// the domain/pubkey/transport are gathered by the E2E input screens.
+	e2eShortlist []string
+	e2eDomain    string
+	e2ePubKey    string
+	e2eTransport string
 }
 
 // ------------------------------------------------------------
@@ -812,6 +820,14 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m, screenCmd = m.handleDNSWorkersScreen(msg)
 	case screenDNSNearby:
 		m, screenCmd = m.handleDNSNearbyScreen(msg)
+	case screenE2EPrompt:
+		m, screenCmd = m.handleE2EPromptScreen(msg)
+	case screenE2EDomain:
+		m, screenCmd = m.handleE2EDomainScreen(msg)
+	case screenE2EPubKey:
+		m, screenCmd = m.handleE2EPubKeyScreen(msg)
+	case screenE2ETransport:
+		m, screenCmd = m.handleE2ETransportScreen(msg)
 	case screenScanResults:
 		m, screenCmd = m.handleScanResultsScreen(msg)
 	}
@@ -883,6 +899,14 @@ func (m tuiModel) View() string {
 		body = m.viewDNSWorkers(w, h)
 	case screenDNSNearby:
 		body = m.viewDNSNearby(w, h)
+	case screenE2EPrompt:
+		body = m.viewE2EPrompt(w, h)
+	case screenE2EDomain:
+		body = m.viewSimpleInput(w, h, "E2E · DNSTT DOMAIN", "t.example.com")
+	case screenE2EPubKey:
+		body = m.viewSimpleInput(w, h, "E2E · DNSTT PUBLIC KEY (hex; blank = reachability only)", "64 hex chars")
+	case screenE2ETransport:
+		body = m.viewE2ETransport(w, h)
 	default:
 		body = m.viewMenu(w, h)
 	}
@@ -967,7 +991,10 @@ func (m tuiModel) viewMenu(w, h int) string {
 
 	var menuRows strings.Builder
 	for i := range col1 {
-		menuRows.WriteString(col1[i] + "  " + col2[i] + "\n")
+		menuRows.WriteString(col1[i])
+		menuRows.WriteString("  ")
+		menuRows.WriteString(col2[i])
+		menuRows.WriteString("\n")
 	}
 
 	menuPanel := panelStyle(cBorderActive).Width(inner).Render(
@@ -988,12 +1015,17 @@ func (m tuiModel) viewMenu(w, h int) string {
 	help := sDim.Render("↑↓ move column  ·  ←→ switch columns  ·  Enter select  ·  q quit")
 
 	var out strings.Builder
-	out.WriteString(titleBar + "\n")
-	out.WriteString(accentBar + "\n\n")
-	out.WriteString(menuPanel + "\n\n")
-	out.WriteString(logPanel + "\n\n")
+	out.WriteString(titleBar)
+	out.WriteString("\n")
+	out.WriteString(accentBar)
+	out.WriteString("\n\n")
+	out.WriteString(menuPanel)
+	out.WriteString("\n\n")
+	out.WriteString(logPanel)
+	out.WriteString("\n\n")
 	if m.toastActive() {
-		out.WriteString(m.toast + "\n")
+		out.WriteString(m.toast)
+		out.WriteString("\n")
 	}
 	out.WriteString(help)
 	return out.String()
@@ -1021,13 +1053,15 @@ func (m tuiModel) viewList(w, h int, title string, items []string, help string) 
 	var rows strings.Builder
 	for i := start; i < end; i++ {
 		if i == m.cursor {
-			rows.WriteString(sSelected.Render(items[i]) + "\n")
+			rows.WriteString(sSelected.Render(items[i]))
 		} else {
-			rows.WriteString(sNormal.Render(items[i]) + "\n")
+			rows.WriteString(sNormal.Render(items[i]))
 		}
+		rows.WriteString("\n")
 	}
 	if len(items) > visibleRows {
-		rows.WriteString(sDim.Render(fmt.Sprintf("  [%d/%d]", m.cursor+1, len(items))) + "\n")
+		rows.WriteString(sDim.Render(fmt.Sprintf("  [%d/%d]", m.cursor+1, len(items))))
+		rows.WriteString("\n")
 	}
 
 	panel := panelStyle(cBorderActive).Width(inner).Render(
@@ -1100,11 +1134,12 @@ func (m tuiModel) viewSelectASN(w, h int) string {
 			line = line[:inner-4]
 		}
 		if i == m.cursor {
-			rows.WriteString(sSelected.Render(line) + "\n")
+			rows.WriteString(sSelected.Render(line))
 		} else {
 			// Use bright white for ASN text as requested
-			rows.WriteString(lipgloss.NewStyle().Foreground(cBright).PaddingLeft(1).Render(line) + "\n")
+			rows.WriteString(lipgloss.NewStyle().Foreground(cBright).PaddingLeft(1).Render(line))
 		}
+		rows.WriteString("\n")
 	}
 
 	status := fmt.Sprintf("  %s  selected: %s",
@@ -1250,10 +1285,11 @@ func (m tuiModel) viewSelectPorts(w, h int) string {
 		}
 
 		if i == m.cursor {
-			rows.WriteString(sSelected.Render(line) + "\n")
+			rows.WriteString(sSelected.Render(line))
 		} else {
-			rows.WriteString(sNormal.Render(line) + "\n")
+			rows.WriteString(sNormal.Render(line))
 		}
+		rows.WriteString("\n")
 	}
 
 	panel := panelStyle(cBorderActive).Width(inner).Render(
@@ -1312,10 +1348,11 @@ func (m tuiModel) viewToggleProbeFlags(w, h int) string {
 		}
 		line := fmt.Sprintf("%s %s", prefix, item)
 		if i == m.cursor {
-			rows.WriteString(sSelected.Render(line) + "\n")
+			rows.WriteString(sSelected.Render(line))
 		} else {
-			rows.WriteString(sNormal.Render(line) + "\n")
+			rows.WriteString(sNormal.Render(line))
 		}
+		rows.WriteString("\n")
 	}
 	panel := panelStyle(cBorderActive).Width(inner).Render(
 		title + "\n\n" + rows.String() + "\n" + sDim.Render("↑↓ navigate  ·  Enter/Space toggle  ·  Esc back"),
@@ -1485,7 +1522,8 @@ func (m tuiModel) viewScanning(w, h int) string {
 			}
 		}
 		for i := len(collected) - 1; i >= 0; i-- {
-			liveRows.WriteString(sSuccess.Render("  > "+collected[i]) + "\n")
+			liveRows.WriteString(sSuccess.Render("  > " + collected[i]))
+			liveRows.WriteString("\n")
 		}
 	} else {
 		n := len(m.scanResults)
@@ -1515,7 +1553,8 @@ func (m tuiModel) viewScanning(w, h int) string {
 			if len(endpoint) > inner-6 {
 				endpoint = endpoint[:inner-6]
 			}
-			liveRows.WriteString(sSuccess.Render("  > "+endpoint) + "\n")
+			liveRows.WriteString(sSuccess.Render("  > " + endpoint))
+			liveRows.WriteString("\n")
 		}
 	}
 
@@ -1574,7 +1613,8 @@ func (m tuiModel) viewScanResults(w, h int) string {
 
 	var body strings.Builder
 	if m.scanErr != nil {
-		body.WriteString(sError.Render("x "+m.scanErr.Error()) + "\n")
+		body.WriteString(sError.Render("x " + m.scanErr.Error()))
+		body.WriteString("\n")
 	} else {
 		passedCount := len(m.scanResults)
 		if m.operationType == "sni_scanner" || m.operationType == "desync_scanner" {
@@ -1692,7 +1732,8 @@ func (m tuiModel) viewScanResults(w, h int) string {
 				}
 			}
 
-			body.WriteString(rendered + "\n")
+			body.WriteString(rendered)
+			body.WriteString("\n")
 		}
 		if len(m.scanResults) > visibleRows {
 			body.WriteString(sDim.Render(fmt.Sprintf("\n  [%d/%d]", m.cursor+1, len(m.scanResults))))
@@ -1724,10 +1765,11 @@ func (m tuiModel) viewManageDPISettings(w, h int) string {
 	var rows strings.Builder
 	for i, item := range items {
 		if i == m.cursor {
-			rows.WriteString(sSelected.Render(item) + "\n")
+			rows.WriteString(sSelected.Render(item))
 		} else {
-			rows.WriteString(sNormal.Render(item) + "\n")
+			rows.WriteString(sNormal.Render(item))
 		}
+		rows.WriteString("\n")
 	}
 
 	help := "↑↓ navigate  ·  Enter toggle/select  ·  t target  ·  s save  ·  Esc back"
@@ -2992,6 +3034,18 @@ func (m tuiModel) handlePoolOperationComplete(msg poolOperationCompleteMsg) (tui
 	} else {
 		m.addLog(fmt.Sprintf("%s done: %d items", msg.operationType, len(msg.results)))
 		m.setToast(sSuccess.Render(fmt.Sprintf("OK %s complete", msg.operationType)), 3*time.Second)
+		// After a DNS scan, offer the end-to-end tunnel test on the tunnel-ready
+		// shortlist (range-scout style). The DNS results are formatted display
+		// lines, so extract the clean leading IP of each for the E2E targets.
+		if msg.operationType == "dns_scan" {
+			shortlist := extractLeadingIPs(m.scanResults)
+			if len(shortlist) > 0 {
+				m.e2eShortlist = shortlist
+				m.screen = screenE2EPrompt
+				m.cursor = 0
+				return m, nil
+			}
+		}
 		m.screen = screenScanResults
 		m.cursor = 0
 	}
@@ -3775,7 +3829,7 @@ func (m *tuiModel) startScanLogFile(scanKind string, targets []string, ports []i
 			if absFailed, err := filepath.Abs(failedPath); err == nil {
 				failedPath = absFailed
 			}
-			_ = os.WriteFile(failedPath, []byte(fmt.Sprintf("# Failed endpoints\n# kind: %s\n# partial: true\n\n", scanKind)), 0o644)
+			_ = os.WriteFile(failedPath, fmt.Appendf(nil, "# Failed endpoints\n# kind: %s\n# partial: true\n\n", scanKind), 0o644)
 			m.scanFailedPath = failedPath
 
 			csvPath := filepath.Join(logDir, fmt.Sprintf("sni-%s-%s.csv", scanKind, stamp))

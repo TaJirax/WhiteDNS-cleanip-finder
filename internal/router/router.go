@@ -257,13 +257,30 @@ func (r *Router) ClearAllRoutes() {
 	r.domainCaches = make(map[string]*DomainCache)
 }
 
-// GetSessionMetrics returns a copy of session stats
+// GetSessionMetrics returns a copy of session stats. Fields are protected by
+// sessionMetrics.mu (see RecordHotStart/RecordColdStart/etc.), not r.mu, so
+// that lock is used here too; copying the struct by value would also copy its
+// embedded mutex, which is invalid, so each field is copied individually.
 func (r *Router) GetSessionMetrics() SessionMetrics {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+	m := r.sessionMetrics
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 
-	metrics := *r.sessionMetrics
-	return metrics
+	return SessionMetrics{
+		StartTime:           m.StartTime,
+		TotalRequests:       m.TotalRequests,
+		HotStarts:           m.HotStarts,
+		ColdStarts:          m.ColdStarts,
+		L1Hits:              m.L1Hits,
+		L2Hits:              m.L2Hits,
+		RacesStarted:        m.RacesStarted,
+		RaceWins:            m.RaceWins,
+		RaceFailures:        m.RaceFailures,
+		RaceTimesMs:         append([]float64(nil), m.RaceTimesMs...),
+		SelectedLatenciesMs: append([]float64(nil), m.SelectedLatenciesMs...),
+		Reroutes:            m.Reroutes,
+		RerouteTimesMs:      append([]float64(nil), m.RerouteTimesMs...),
+	}
 }
 
 // Helper methods

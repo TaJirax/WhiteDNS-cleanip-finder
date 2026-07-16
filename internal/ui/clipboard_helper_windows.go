@@ -58,6 +58,11 @@ func readClipboardTextWindows() (string, bool) {
 		return "", false
 	}
 
+	// go vet's unsafeptr check flags this uintptr->Pointer conversion on
+	// principle (a uintptr derived from a Pointer can be invalidated by a
+	// moving GC between the two), but ptr addresses GlobalLock's native
+	// Windows heap memory, never Go's GC-managed heap, so that hazard does
+	// not apply here.
 	text := windows.UTF16PtrToString((*uint16)(unsafe.Pointer(ptr)))
 	if text == "" {
 		return "", false

@@ -27,6 +27,13 @@ type ScanConfig struct {
 	DNSProtocol   string // "udp" | "tcp" | "both" | "all" (default "both"); "all" also probes DoT/DoH
 	DNSReference  string // truth-table reference resolver: "google" (default) | "cloudflare" | "quad9"
 	DNSTestNearby bool   // also expand + rescan the /24 around each tunnel-ready hit (disabled in LiteMode: multiplies scan size ~256x per hit)
+
+	// DNSTT end-to-end tunnel test (StartE2EScan) options. Targets carries the
+	// resolver shortlist (one per line) to validate through a live DNSTT server.
+	E2EDomain    string // DNSTT server's NS-delegated zone; required
+	E2EPubKey    string // DNSTT server public key (hex); empty => reachability-only
+	E2ETransport string // "udp" | "tcp" (both supported) | "dot" | "doh" (not yet implemented)
+	E2EURL       string // HTTP endpoint fetched through the tunnel; empty => default generate_204
 }
 
 // NewScanConfig returns an empty config (convenient constructor for gomobile,

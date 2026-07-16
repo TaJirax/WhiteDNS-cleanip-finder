@@ -3,7 +3,6 @@ package dnsscan
 import (
 	"context"
 	"crypto/rand"
-	"crypto/tls"
 	"encoding/hex"
 	"fmt"
 	"net"
@@ -156,10 +155,7 @@ func ScanResolvers(ctx context.Context, ips []string, opts Options, progress fun
 	_ = truth.FetchTruth() // best-effort; Verify() treats an empty table as clean
 
 	dialer := &net.Dialer{Timeout: opts.Timeout}
-	dohClient := &http.Client{
-		Timeout:   opts.Timeout,
-		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
-	}
+	dohClient := newDoHClient(opts.Timeout, dialer)
 
 	total := len(ips)
 	results := make([]ResolverResult, total)
