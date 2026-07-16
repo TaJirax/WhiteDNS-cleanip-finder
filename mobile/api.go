@@ -1260,10 +1260,11 @@ func StartDNSScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 		passedTotal := 0
 		var all []dnsscan.ResolverResult
 
-		// Allocate exactly two stable Android result files for this scan. Each
-		// chunk overwrites these same paths so stopped/killed scans retain their
-		// progress without producing a new timestamped desktop report set.
-		outDir := filepath.Join(dataDir, "results")
+		// Allocate the stable Android DNS report set (txt + csv + html + xlsx +
+		// json) for this scan in its own "dns scan" folder. Each chunk overwrites
+		// these same paths so stopped/killed scans retain their progress without
+		// producing a new timestamped batch of files.
+		outDir := filepath.Join(dataDir, "dns scan")
 		reportPaths, reportPathErr := dnsscan.NewMobileReportPaths(outDir)
 		if reportPathErr != nil {
 			lf.write("[DNS] report setup failed: " + reportPathErr.Error())

@@ -28,20 +28,28 @@ type ReportPaths struct {
 	JSON           string
 }
 
-// MobileReportPaths is the intentionally small Android DNS export set. Paths
-// are allocated once at scan start and then overwritten after every chunk, so
-// incremental persistence never creates a new timestamped batch of files.
+// MobileReportPaths is the Android DNS export set. Paths are allocated once at
+// scan start and then overwritten after every chunk, so incremental persistence
+// never creates a new timestamped batch of files. It mirrors the desktop report
+// formats (txt + csv + html + xlsx + json) so phone scans produce the same
+// colour-coded spreadsheet/browser output, not just plain text.
 type MobileReportPaths struct {
-	Detailed  string // categorized passed/poison/hijack report with probe details
-	PassedRaw string // clean tunnel-ready resolver IPs only, one per line
+	Detailed  string // categorized passed/poison/hijack report with probe details (txt)
+	PassedRaw string // clean tunnel-ready resolver IPs only, one per line (txt)
+	CSV       string // every resolver, one row each (spreadsheet import)
+	HTML      string // colour-coded per-status table (opens in browser/Excel)
+	XLSX      string // real spreadsheet with per-status cell fills
+	JSON      string // machine-readable full dump
 }
 
-// NewMobileReportPaths allocates the two stable result paths used by one
-// Android DNS scan. The caller should retain this value for every chunk flush.
+// NewMobileReportPaths allocates the stable result paths used by one Android DNS
+// scan. All files share a single timestamp so a chunk flush overwrites the same
+// set instead of allocating more. The caller should retain this value for every
+// chunk flush.
 func NewMobileReportPaths(dir string) (MobileReportPaths, error) {
 	var paths MobileReportPaths
 	if strings.TrimSpace(dir) == "" {
-		dir = "results"
+		dir = "dns scan"
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return paths, err
@@ -49,14 +57,19 @@ func NewMobileReportPaths(dir string) (MobileReportPaths, error) {
 	stamp := time.Now().Format("20060102-150405")
 	paths.Detailed = filepath.Join(dir, fmt.Sprintf("dns-results-%s.txt", stamp))
 	paths.PassedRaw = filepath.Join(dir, fmt.Sprintf("dns-passed-raw-%s.txt", stamp))
+	paths.CSV = filepath.Join(dir, fmt.Sprintf("dns-resolvers-%s.csv", stamp))
+	paths.HTML = filepath.Join(dir, fmt.Sprintf("dns-resolvers-%s.html", stamp))
+	paths.XLSX = filepath.Join(dir, fmt.Sprintf("dns-resolvers-%s.xlsx", stamp))
+	paths.JSON = filepath.Join(dir, fmt.Sprintf("dns-resolvers-%s.json", stamp))
 	return paths, nil
 }
 
-// WriteMobileReports rewrites exactly two Android result files. The detailed
-// file contains useful records grouped into PASSED, POISON, and HIJACK sections;
-// non-passing/no-response targets are counted in the summary but deliberately
-// not dumped. The raw file contains only clean tunnel-ready passed IPs with no
-// decoration.
+// WriteMobileReports rewrites the Android result files. The detailed txt file
+// groups useful records into PASSED, POISON, and HIJACK sections (non-passing /
+// no-response targets are counted in the summary but not dumped); the raw txt
+// holds only clean tunnel-ready passed IPs. The csv/html/xlsx/json files carry
+// every scanned resolver — full desktop parity — so the colour-coded spreadsheet
+// and browser views are available on the phone too.
 func WriteMobileReports(paths MobileReportPaths, results []ResolverResult) error {
 	if strings.TrimSpace(paths.Detailed) == "" || strings.TrimSpace(paths.PassedRaw) == "" {
 		return fmt.Errorf("mobile DNS report paths are empty")
@@ -65,7 +78,19 @@ func WriteMobileReports(paths MobileReportPaths, results []ResolverResult) error
 	if err := writeMobileDetailedReport(paths.Detailed, sorted); err != nil {
 		return err
 	}
-	return writeMobilePassedList(paths.PassedRaw, sorted)
+	if err := writeMobilePassedList(paths.PassedRaw, sorted); err != nil {
+		return err
+	}
+	if err := writeCSV(paths.CSV, sorted); err != nil {
+		return err
+	}
+	if err := writeHTML(paths.HTML, sorted); err != nil {
+		return err
+	}
+	if err := writeXLSX(paths.XLSX, sorted); err != nil {
+		return err
+	}
+	return writeJSON(paths.JSON, sorted)
 }
 
 // statusCounts tallies how many resolvers landed in each state.

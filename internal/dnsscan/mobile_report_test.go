@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-func TestMobileReportsStayAtTwoFilesAndCategorizeResults(t *testing.T) {
+func TestMobileReportsStayStableAndCategorizeResults(t *testing.T) {
 	dir := t.TempDir()
 	paths, err := NewMobileReportPaths(dir)
 	if err != nil {
@@ -30,20 +30,26 @@ func TestMobileReportsStayAtTwoFilesAndCategorizeResults(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Full desktop-parity set: two txt files plus csv/html/xlsx/json, and no more
+	// (flushes overwrite, never accumulate).
+	wantFiles := []string{paths.Detailed, paths.PassedRaw, paths.CSV, paths.HTML, paths.XLSX, paths.JSON}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 2 {
+	if len(entries) != len(wantFiles) {
 		names := make([]string, 0, len(entries))
 		for _, entry := range entries {
 			names = append(names, entry.Name())
 		}
-		t.Fatalf("mobile DNS report created %d files (%v), want exactly 2", len(entries), names)
+		t.Fatalf("mobile DNS report created %d files (%v), want exactly %d", len(entries), names, len(wantFiles))
 	}
-	for _, path := range []string{paths.Detailed, paths.PassedRaw} {
+	for _, path := range wantFiles {
 		if filepath.Dir(path) != dir {
 			t.Fatalf("report path %q is outside %q", path, dir)
+		}
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("expected report file %q: %v", path, err)
 		}
 	}
 
@@ -69,5 +75,20 @@ func TestMobileReportsStayAtTwoFilesAndCategorizeResults(t *testing.T) {
 	}
 	if got, want := string(rawBytes), "192.0.2.10\n"; got != want {
 		t.Fatalf("raw passed list = %q, want %q", got, want)
+	}
+
+	// Unlike the filtered detailed txt, the csv/html/json dumps must include every
+	// scanned resolver so the spreadsheet/browser views are complete.
+	for _, p := range []string{paths.CSV, paths.HTML, paths.JSON} {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := string(b)
+		for _, r := range results {
+			if !strings.Contains(body, r.IP) {
+				t.Errorf("%s missing resolver %s (full dump expected)", filepath.Base(p), r.IP)
+			}
+		}
 	}
 }
