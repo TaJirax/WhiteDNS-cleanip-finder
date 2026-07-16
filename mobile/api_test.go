@@ -9,6 +9,18 @@ import (
 	"time"
 )
 
+func TestTunnelReadyIPsPathSupportsCompactAndroidReports(t *testing.T) {
+	dir := t.TempDir()
+	detailed := filepath.Join(dir, "dns-results-20260716-120000.txt")
+	raw := filepath.Join(dir, "dns-passed-raw-20260716-120000.txt")
+	if err := os.WriteFile(raw, []byte("192.0.2.10\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := TunnelReadyIPsPath(detailed); got != raw {
+		t.Fatalf("TunnelReadyIPsPath() = %q, want %q", got, raw)
+	}
+}
+
 // captureListener records callback activity for assertions.
 type captureListener struct {
 	mu        sync.Mutex

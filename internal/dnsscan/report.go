@@ -28,6 +28,46 @@ type ReportPaths struct {
 	JSON           string
 }
 
+// MobileReportPaths is the intentionally small Android DNS export set. Paths
+// are allocated once at scan start and then overwritten after every chunk, so
+// incremental persistence never creates a new timestamped batch of files.
+type MobileReportPaths struct {
+	Detailed  string // categorized passed/poison/hijack report with probe details
+	PassedRaw string // clean tunnel-ready resolver IPs only, one per line
+}
+
+// NewMobileReportPaths allocates the two stable result paths used by one
+// Android DNS scan. The caller should retain this value for every chunk flush.
+func NewMobileReportPaths(dir string) (MobileReportPaths, error) {
+	var paths MobileReportPaths
+	if strings.TrimSpace(dir) == "" {
+		dir = "results"
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return paths, err
+	}
+	stamp := time.Now().Format("20060102-150405")
+	paths.Detailed = filepath.Join(dir, fmt.Sprintf("dns-results-%s.txt", stamp))
+	paths.PassedRaw = filepath.Join(dir, fmt.Sprintf("dns-passed-raw-%s.txt", stamp))
+	return paths, nil
+}
+
+// WriteMobileReports rewrites exactly two Android result files. The detailed
+// file contains useful records grouped into PASSED, POISON, and HIJACK sections;
+// non-passing/no-response targets are counted in the summary but deliberately
+// not dumped. The raw file contains only clean tunnel-ready passed IPs with no
+// decoration.
+func WriteMobileReports(paths MobileReportPaths, results []ResolverResult) error {
+	if strings.TrimSpace(paths.Detailed) == "" || strings.TrimSpace(paths.PassedRaw) == "" {
+		return fmt.Errorf("mobile DNS report paths are empty")
+	}
+	sorted := sortedResults(results)
+	if err := writeMobileDetailedReport(paths.Detailed, sorted); err != nil {
+		return err
+	}
+	return writeMobilePassedList(paths.PassedRaw, sorted)
+}
+
 // statusCounts tallies how many resolvers landed in each state.
 func statusCounts(results []ResolverResult) map[string]int {
 	c := map[string]int{}
@@ -50,13 +90,7 @@ func WriteReports(dir string, results []ResolverResult) (ReportPaths, error) {
 	ts := time.Now().Format("20060102_150405")
 	paths.Dir = dir
 
-	sorted := append([]ResolverResult(nil), results...)
-	sort.Slice(sorted, func(i, j int) bool {
-		if sorted[i].Score != sorted[j].Score {
-			return sorted[i].Score > sorted[j].Score // best first
-		}
-		return sorted[i].IP < sorted[j].IP
-	})
+	sorted := sortedResults(results)
 
 	paths.Full = filepath.Join(dir, fmt.Sprintf("dns_scan_%s.txt", ts))
 	if err := writeFullReport(paths.Full, sorted); err != nil {
@@ -91,6 +125,78 @@ func WriteReports(dir string, results []ResolverResult) (ReportPaths, error) {
 		return paths, err
 	}
 	return paths, nil
+}
+
+func sortedResults(results []ResolverResult) []ResolverResult {
+	sorted := append([]ResolverResult(nil), results...)
+	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i].Score != sorted[j].Score {
+			return sorted[i].Score > sorted[j].Score // best first
+		}
+		return sorted[i].IP < sorted[j].IP
+	})
+	return sorted
+}
+
+func writeMobileDetailedReport(path string, results []ResolverResult) error {
+	c := statusCounts(results)
+	passed := 0
+	for _, r := range results {
+		if mobilePassed(r) {
+			passed++
+		}
+	}
+	other := len(results) - passed - c[StatusPoison] - c[StatusHijack]
+	if other < 0 {
+		other = 0
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "WhiteDNS Android DNS Results\nGenerated: %s\nTotal scanned: %d\n", time.Now().Format("2006-01-02 15:04:05"), len(results))
+	fmt.Fprintf(&b, "Passed: %d  Poison: %d  Hijack: %d  Other/failed: %d\n",
+		passed, c[StatusPoison], c[StatusHijack], other)
+	b.WriteString("Passed means clean + tunnel-ready, with no poisoning or hijack detected.\n")
+
+	writeSection := func(title string, count int, include func(ResolverResult) bool) {
+		fmt.Fprintf(&b, "\n[%s] %d\n%s\n", title, count, strings.Repeat("=", 72))
+		for _, r := range results {
+			if !include(r) {
+				continue
+			}
+			fmt.Fprintf(&b, "%s  score=%d/6  latency=%dms  tunnel=%v  nearby=%v\n",
+				r.IP, r.Score, r.BestLatency.Milliseconds(), r.TunnelReady, r.Nearby)
+			fmt.Fprintf(&b, "  UDP=%v TCP=%v RA=%v EDNS0=%v TXT-pass=%v NS=%d AR=%d reason=%s\n",
+				r.UDPOK, r.TCPOK, r.RA, r.EDNS, r.TxtPass, r.NSCount, r.ARCount, r.TunnelReason)
+			if r.PoisonIP != "" {
+				fmt.Fprintf(&b, "  poison_ip=%s\n", r.PoisonIP)
+			}
+			if r.HijackIP != "" {
+				fmt.Fprintf(&b, "  hijack_ip=%s\n", r.HijackIP)
+			}
+			for _, header := range r.HeaderDump() {
+				fmt.Fprintf(&b, "  %s\n", header)
+			}
+		}
+	}
+
+	writeSection("PASSED", passed, mobilePassed)
+	writeSection("POISON", c[StatusPoison], func(r ResolverResult) bool { return r.Status == StatusPoison })
+	writeSection("HIJACK", c[StatusHijack], func(r ResolverResult) bool { return r.Status == StatusHijack })
+	return os.WriteFile(path, []byte(b.String()), 0o644)
+}
+
+func mobilePassed(r ResolverResult) bool {
+	return r.Status == StatusValid && r.TunnelReady
+}
+
+func writeMobilePassedList(path string, results []ResolverResult) error {
+	var b strings.Builder
+	for _, r := range results {
+		if mobilePassed(r) {
+			b.WriteString(r.IP)
+			b.WriteString("\n")
+		}
+	}
+	return os.WriteFile(path, []byte(b.String()), 0o644)
 }
 
 func writeFullReport(path string, results []ResolverResult) error {

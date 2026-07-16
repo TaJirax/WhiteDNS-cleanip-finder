@@ -1257,20 +1257,24 @@ func StartDNSScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 		start := time.Now()
 		etaEst := newETATracker()
 		processedBase := 0
-		hitsTotal := 0
+		passedTotal := 0
 		var all []dnsscan.ResolverResult
 
-		// Every other scan kind persists accepted results to disk as they arrive
-		// (resultFile.flush(), IP-scan per-chunk writes) specifically so a stopped
-		// scan or a killed app still keeps whatever was found. dnsscan.WriteReports
-		// rewrites the full report set from `all`, so calling it at chunk
-		// boundaries gives DNS scan the same guarantee: the "dns scan" folder and
-		// its files exist from the first chunk onward, not only on a clean finish.
-		outDir := filepath.Join(dataDir, "dns scan")
+		// Allocate exactly two stable Android result files for this scan. Each
+		// chunk overwrites these same paths so stopped/killed scans retain their
+		// progress without producing a new timestamped desktop report set.
+		outDir := filepath.Join(dataDir, "results")
+		reportPaths, reportPathErr := dnsscan.NewMobileReportPaths(outDir)
+		if reportPathErr != nil {
+			lf.write("[DNS] report setup failed: " + reportPathErr.Error())
+			lf.close()
+			l.OnDone("", "report setup failed: "+reportPathErr.Error())
+			return
+		}
 		var lastSavedPath string
 		flushReports := func() {
-			if paths, err := dnsscan.WriteReports(outDir, all); err == nil {
-				lastSavedPath = paths.Full
+			if err := dnsscan.WriteMobileReports(reportPaths, all); err == nil {
+				lastSavedPath = reportPaths.Detailed
 			} else {
 				lf.write("[DNS] report flush failed: " + err.Error())
 			}
@@ -1283,11 +1287,12 @@ func StartDNSScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 		flushReports() // create the folder + empty reports immediately, before any resolver completes
 
 		// progress is invoked from a single goroutine per ScanResolvers call (see
-		// dnsscan.ScanResolvers doc), so hitsTotal/processedBase need no locking.
+		// dnsscan.ScanResolvers doc), so passedTotal/processedBase need no locking.
 		makeProgress := func(totalForETA int) func(done, tot int, r dnsscan.ResolverResult) {
 			return func(done, _ int, r dnsscan.ResolverResult) {
-				if r.TunnelReady {
-					hitsTotal++
+				passed := r.TunnelReady && r.Status == dnsscan.StatusValid
+				if passed {
+					passedTotal++
 				}
 				if h.isStopped() {
 					return
@@ -1296,16 +1301,23 @@ func StartDNSScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 				if r.Responded {
 					status = fmt.Sprintf("resp %dms", r.BestLatency.Milliseconds())
 				}
-				line := fmt.Sprintf("%-15s %-13s score=%d/6 tunnel=%v (%s)", r.IP, status, r.Score, r.TunnelReady, r.TunnelReason)
+				line := fmt.Sprintf("%-15s %-13s verdict=%s score=%d/6 tunnel=%v (%s)",
+					r.IP, status, r.Status, r.Score, r.TunnelReady, r.TunnelReason)
+				if r.PoisonIP != "" {
+					line += " poison_ip=" + r.PoisonIP
+				}
+				if r.HijackIP != "" {
+					line += " hijack_ip=" + r.HijackIP
+				}
 				lf.write(line)
 				if logThrottle.allow() {
 					l.OnLog(line)
 				}
-				if r.TunnelReady && resultThrottle.allow() {
+				if passed && resultThrottle.allow() {
 					l.OnResult(line)
 				}
 				doneTotal := processedBase + done
-				l.OnProgress(doneTotal, totalForETA, hitsTotal, totalForETA, r.IP, etaEst.eta(doneTotal, totalForETA))
+				l.OnProgress(doneTotal, totalForETA, passedTotal, totalForETA, r.IP, etaEst.eta(doneTotal, totalForETA))
 			}
 		}
 
@@ -1413,8 +1425,8 @@ func StartDNSScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 		if h.isStopped() {
 			reason = "stopped"
 		}
-		endMsg := fmt.Sprintf("[DNS-SCAN-END] reason=%s scanned=%d tunnel_ready=%d elapsed=%s",
-			reason, len(all), hitsTotal, time.Since(start).Round(time.Second))
+		endMsg := fmt.Sprintf("[DNS-SCAN-END] reason=%s scanned=%d passed_clean=%d elapsed=%s",
+			reason, len(all), passedTotal, time.Since(start).Round(time.Second))
 		lf.write(endMsg)
 		l.OnLog(endMsg)
 		lf.close()
@@ -1570,12 +1582,10 @@ func boolYN(v bool) string {
 	return "fail"
 }
 
-// TunnelReadyIPsPath derives the clean tunnel-ready IP list written alongside a
-// DNS scan report. dnsReportPath is the savedPath a DNS scan returned via
-// OnDone (…/dns_scan_<ts>.txt); the companion list is …/tunnel_ready_ips_<ts>.txt
-// in the same folder. Returns the list path if it exists and is non-empty (so
-// an E2E test can be chained with Targets="@"+path), otherwise "". Callers must
-// treat "" as "no tunnel-ready resolvers to test".
+// TunnelReadyIPsPath derives the clean passed-IP list written alongside an
+// Android DNS scan report. New reports use dns-results-<ts>.txt plus the raw
+// dns-passed-raw-<ts>.txt companion. The legacy desktop names remain supported
+// so existing callers and old reports keep working.
 func TunnelReadyIPsPath(dnsReportPath string) string {
 	dnsReportPath = strings.TrimSpace(dnsReportPath)
 	if dnsReportPath == "" {
@@ -1583,10 +1593,15 @@ func TunnelReadyIPsPath(dnsReportPath string) string {
 	}
 	dir := filepath.Dir(dnsReportPath)
 	base := filepath.Base(dnsReportPath)
-	if !strings.HasPrefix(base, "dns_scan_") {
+	var candidate string
+	switch {
+	case strings.HasPrefix(base, "dns-results-"):
+		candidate = filepath.Join(dir, "dns-passed-raw-"+strings.TrimPrefix(base, "dns-results-"))
+	case strings.HasPrefix(base, "dns_scan_"):
+		candidate = filepath.Join(dir, "tunnel_ready_ips_"+strings.TrimPrefix(base, "dns_scan_"))
+	default:
 		return ""
 	}
-	candidate := filepath.Join(dir, "tunnel_ready_ips_"+strings.TrimPrefix(base, "dns_scan_"))
 	info, err := os.Stat(candidate)
 	if err != nil || info.Size() == 0 {
 		return ""
