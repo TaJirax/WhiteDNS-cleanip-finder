@@ -3373,6 +3373,41 @@ func (m tuiModel) cmdPoolOperation(opType string, asnNetworks []string) tea.Cmd 
 				}
 				if len(results) == 0 {
 					results = []string{"No responding IPs found"}
+				} else if opType == "scan_ips" {
+					// Real, sorted speed data for the main scan's results — reuses the
+					// same benchmark engine as the dedicated Speed Rank feature instead
+					// of leaving results unsorted with no download/upload numbers.
+					select {
+					case ch <- logMsg{text: fmt.Sprintf("[SPEED-RANK] benchmarking %d accepted IPs...", len(results))}:
+					default:
+					}
+					runCtx := m.scanCtx
+					if runCtx == nil {
+						runCtx = context.Background()
+					}
+					speedResults := scanner.SpeedRankIPs(runCtx, results, scanner.SpeedRankOptions{}, func(processed, total, reachable int, currentIP string) {
+						select {
+						case ch <- scanProgressMsg{current: processed, total: total, hits: reachable, startTime: start, currentIP: currentIP, totalIPs: total}:
+						default:
+						}
+					})
+					formatted := make([]string, len(speedResults))
+					for i, r := range speedResults {
+						formatted[i] = scanner.FormatSpeedRankLine(i+1, r)
+					}
+					results = formatted
+					if csvPath, err := scanner.WriteSpeedRankCSV(m.app.DataDir, speedResults); err == nil {
+						select {
+						case ch <- logMsg{text: "[SPEED-RANK] csv report: " + csvPath}:
+						default:
+						}
+					}
+					if htmlPath, err := scanner.WriteSpeedRankHTML(m.app.DataDir, speedResults); err == nil {
+						select {
+						case ch <- logMsg{text: "[SPEED-RANK] html report: " + htmlPath}:
+						default:
+						}
+					}
 				}
 				close(ch)
 				return poolOperationCompleteMsg{operationType: opType, results: results, duration: time.Since(t0)}
