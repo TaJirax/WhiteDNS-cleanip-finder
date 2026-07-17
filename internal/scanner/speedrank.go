@@ -40,6 +40,10 @@ type SpeedRankOptions struct {
 	// measurement; the first one that responds is used. Defaults to the
 	// Cloudflare speed endpoint plus Google generate_204 and Cachefly.
 	DownloadEndpoints []SpeedEndpoint
+	// UploadEndpoints are tried in order for the upload throughput measurement;
+	// the first one that responds is used. Defaults to Cloudflare plus two
+	// public echo endpoints as unpinned fallbacks.
+	UploadEndpoints []SpeedEndpoint
 	// PauseFunc, if set, is polled before each IP is benchmarked; while it
 	// returns true the worker blocks (cooperative pause). nil disables pausing.
 	PauseFunc func() bool
@@ -64,7 +68,12 @@ type SpeedEndpoint struct {
 }
 
 // DefaultSpeedEndpoints returns the ordered fallback list. downloadBytes is
-// substituted into the Cloudflare endpoint.
+// substituted into the Cloudflare endpoint. Only the Cloudflare entry is
+// PinToCandidate (dials the IP being ranked directly) since it is the anycast
+// network these clean-IP scans target; the others are real transfers against
+// well-known public test files but measure the box's general path, not the
+// candidate IP specifically. google-204 is a last-resort reachability check
+// only (0 bytes) — Google has no stable public bandwidth-test file.
 func DefaultSpeedEndpoints(downloadBytes int) []SpeedEndpoint {
 	return []SpeedEndpoint{
 		{
@@ -74,13 +83,40 @@ func DefaultSpeedEndpoints(downloadBytes int) []SpeedEndpoint {
 			PinToCandidate: true,
 		},
 		{
+			Name: "cachefly",
+			URL:  "https://cachefly.cachefly.net/10mb.test",
+		},
+		{
+			Name: "hetzner",
+			URL:  "https://speed.hetzner.de/100MB.bin",
+		},
+		{
 			Name:         "google-204",
 			URL:          "https://www.google.com/generate_204",
 			Reachability: true,
 		},
+	}
+}
+
+// DefaultUploadEndpoints returns the ordered upload fallback list. Only
+// Cloudflare is PinToCandidate — postman-echo and httpbin are well-known
+// public API-testing echo endpoints that don't persist the uploaded body,
+// but measure the box's general upload path, not the candidate IP.
+func DefaultUploadEndpoints() []SpeedEndpoint {
+	return []SpeedEndpoint{
 		{
-			Name: "cachefly",
-			URL:  "https://cachefly.cachefly.net/50mb.test",
+			Name:           "cloudflare",
+			URL:            "https://speed.cloudflare.com/__up",
+			Host:           "speed.cloudflare.com",
+			PinToCandidate: true,
+		},
+		{
+			Name: "postman-echo",
+			URL:  "https://postman-echo.com/post",
+		},
+		{
+			Name: "httpbin",
+			URL:  "https://httpbin.org/post",
 		},
 	}
 }
@@ -110,6 +146,9 @@ func (o *SpeedRankOptions) applyDefaults() {
 	if len(o.DownloadEndpoints) == 0 {
 		o.DownloadEndpoints = DefaultSpeedEndpoints(o.DownloadBytes)
 	}
+	if len(o.UploadEndpoints) == 0 {
+		o.UploadEndpoints = DefaultUploadEndpoints()
+	}
 }
 
 // SpeedRankResult holds the benchmark outcome for one IP.
@@ -123,9 +162,11 @@ type SpeedRankResult struct {
 	LatencyMs    float64
 	JitterMs     float64
 	Score        float64
-	// Source is the name of the endpoint that produced the throughput number.
+	// Source is the name of the endpoint that produced the download throughput number.
 	Source string
-	Error  string
+	// UploadSource is the name of the endpoint that produced the upload throughput number.
+	UploadSource string
+	Error        string
 }
 
 // score is a composite ranking: reward throughput, penalize loss and latency.
@@ -282,11 +323,12 @@ func benchmarkOneIP(ctx context.Context, ip string, opts SpeedRankOptions) Speed
 		res.Error = "download: " + lastErr
 	}
 
-	// --- Upload throughput (Cloudflare /__up only; pinned to candidate IP) ---
+	// --- Upload throughput with ordered endpoint fallback ---
 	waitWhilePaused(ctx, opts)
 	if ctx.Err() == nil {
-		if mbps, err := measureUpload(ctx, addr, opts); err == nil {
+		if mbps, source, err := measureUpload(ctx, addr, opts); err == nil {
 			res.UploadMbps = mbps
+			res.UploadSource = source
 		}
 	}
 
@@ -393,32 +435,56 @@ func hostFromURL(raw string) string {
 	return ""
 }
 
-func measureUpload(ctx context.Context, candidateAddr string, opts SpeedRankOptions) (float64, error) {
-	client := endpointHTTPClient(candidateAddr, opts.SNI, true, opts)
-	defer client.CloseIdleConnections()
-	reqCtx, cancel := context.WithTimeout(ctx, opts.Timeout)
-	defer cancel()
-	url := fmt.Sprintf("https://%s/__up", opts.SNI)
-	body := &countingReader{remaining: opts.UploadBytes}
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, url, body)
-	if err != nil {
-		return 0, err
-	}
-	req.Host = opts.SNI
-	req.ContentLength = int64(opts.UploadBytes)
-	req.Header.Set("User-Agent", "Mozilla/5.0")
-	req.Header.Set("Content-Type", "application/octet-stream")
+// measureUpload posts opts.UploadBytes of zero bytes to each endpoint in
+// opts.UploadEndpoints, in order, returning the first success's throughput
+// and the winning endpoint's name.
+func measureUpload(ctx context.Context, candidateAddr string, opts SpeedRankOptions) (float64, string, error) {
+	var lastErr error
+	for _, ep := range opts.UploadEndpoints {
+		host := ep.Host
+		if host == "" {
+			host = hostFromURL(ep.URL)
+		}
+		client := endpointHTTPClient(candidateAddr, host, ep.PinToCandidate, opts)
+		reqCtx, cancel := context.WithTimeout(ctx, opts.Timeout)
+		body := &countingReader{remaining: opts.UploadBytes}
+		req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, ep.URL, body)
+		if err != nil {
+			cancel()
+			client.CloseIdleConnections()
+			lastErr = err
+			continue
+		}
+		if host != "" {
+			req.Host = host
+		}
+		req.ContentLength = int64(opts.UploadBytes)
+		req.Header.Set("User-Agent", "Mozilla/5.0")
+		req.Header.Set("Content-Type", "application/octet-stream")
 
-	start := time.Now()
-	resp, err := client.Do(req)
-	if err != nil {
-		return 0, err
+		start := time.Now()
+		resp, err := client.Do(req)
+		cancel()
+		if err != nil {
+			client.CloseIdleConnections()
+			lastErr = err
+			continue
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		client.CloseIdleConnections()
+		if resp.StatusCode >= 400 {
+			lastErr = fmt.Errorf("%s: status %d", ep.Name, resp.StatusCode)
+			continue
+		}
+		elapsed := time.Since(start).Seconds()
+		sent := opts.UploadBytes - body.remaining
+		return mbps(int64(sent), elapsed), ep.Name, nil
 	}
-	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, resp.Body)
-	elapsed := time.Since(start).Seconds()
-	sent := opts.UploadBytes - body.remaining
-	return mbps(int64(sent), elapsed), nil
+	if lastErr == nil {
+		lastErr = fmt.Errorf("no upload endpoints configured")
+	}
+	return 0, "", lastErr
 }
 
 // countingReader streams a fixed number of zero bytes and tracks how many
