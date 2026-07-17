@@ -9,6 +9,12 @@ import (
 	"time"
 )
 
+func TestMaxSpeedRankIPsRaised(t *testing.T) {
+	if maxSpeedRankIPs != 2000 {
+		t.Fatalf("expected maxSpeedRankIPs = 2000, got %d", maxSpeedRankIPs)
+	}
+}
+
 func TestTunnelReadyIPsPathSupportsCompactAndroidReports(t *testing.T) {
 	dir := t.TempDir()
 	detailed := filepath.Join(dir, "dns-results-20260716-120000.txt")

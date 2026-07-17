@@ -1070,9 +1070,11 @@ func runLiteSNIScan(dataDir string, cfg *ScanConfig, l ScanListener, h *ScanHand
 }
 
 // maxSpeedRankIPs caps how many IPs are benchmarked on a phone. The speed test
-// downloads/uploads several MB per IP, so this is intentionally small — the
-// feature is meant to rank an already-passed clean-IP shortlist, not a CIDR.
-const maxSpeedRankIPs = 256
+// downloads/uploads several MB per IP, so this stays bounded rather than
+// unlimited — but raised well past a typical found-IP shortlist so the "Speed
+// Test" auto-chain toggle (which feeds a whole scan's accepted IPs in) isn't
+// artificially truncated.
+const maxSpeedRankIPs = 2000
 
 // StartSpeedRankScan benchmarks each target IP via the Cloudflare speed test
 // (with Google generate_204 and Cachefly as fallbacks) and ranks them by a
