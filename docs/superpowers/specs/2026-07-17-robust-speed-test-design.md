@@ -17,18 +17,18 @@ Both desktop (Go TUI) and Android (Kotlin/Compose), sharing the Go core.
 
 ## Design
 
-### 1. Unify the two probe engines
+### 1. Delete the dead prober; reuse `SpeedRankIPs` as a post-scan pass
 
-Delete `runTransferBenchmarkAsync`, `benchmarkEndpointTransfer`, `benchmarkDirectEndpointTransfer` in `internal/scanner/network_health.go` and their call sites in `internal/scanner/ips.go:830` and `internal/scanner/ips_optimized.go:162`. Replace with a call into the same `benchmarkOneIP` engine `speedrank.go` already uses, run per accepted IP during the main scan. One accurate measurement engine, not two.
+`internal/scanner/ips.go`'s `ScanIPsWithProgress` (and the optimized pipeline) already return the full accepted-IP list as a flat `[]string` once scanning finishes — it is not a live-only stream the caller must sort mid-flight. That makes threading new fields through `ProbeResult`/the hot probe path unnecessary.
 
-### 2. Store results on `ProbeResult`
+- Delete `runTransferBenchmarkAsync`, `benchmarkEndpointTransfer`, `benchmarkDirectEndpointTransfer` in `internal/scanner/network_health.go` and their call sites (`internal/scanner/ips.go:830`, `ips_optimized.go:162`, plus the now-unused `benchSem` pool). Confirmed via grep: these functions have no other callers.
+- No changes to `ProbeResult` (`internal/scanner/types.go`) — out of scope now.
+- **Desktop TUI** (`internal/ui/tui.go`, the ip-scan branch around line 3369): after `scannerInst.ScanIPsWithProgress(...)` returns its accepted `[]string`, immediately run `scanner.SpeedRankIPs(ctx, results, scanner.SpeedRankOptions{}, progressCb)` on that list, then use the sorted, formatted output (`FormatSpeedRankLine`) as the final results list instead of the raw unsorted accepted lines. One measurement pass, real numbers, already sorted — no separate TUI-side `sort.Slice` needed since `SpeedRankIPs` already sorts by `Score` desc.
+- **Android**: no core `mobile/api.go` `StartIPScan` change needed for this part — mobile already streams accepted IPs to disk in memory-bounded chunks (`runChunk`, `mobile/api.go:531-554`), so holding a full slice to speed-rank inline would fight that design. Instead, Android gets speed-ranking via the toggle+auto-chain described in section 6 below, which launches the *existing*, already-correct `StartSpeedRankScan` (`SpeedRankIPs` under the hood) as a second scan over the saved IP file. Its results already render sorted with real Mbps numbers today (confirmed: Speed Rank output is pre-sorted server-side and Android just renders it in order) — no `ResultsScreen.kt` changes needed either.
 
-Add to `internal/scanner/types.go` `ProbeResult`: `DownloadMbps`, `UploadMbps`, `LatencyMs`, `JitterMs`, `LossPct`, `Score float64`. Populate from the unified benchmark call. These persist to the result file/CSV instead of being discarded into a log line.
+### 2. (removed — superseded by section 1; no `ProbeResult` changes)
 
-### 3. Sort results everywhere
-
-- Desktop TUI (`internal/ui/tui.go`): sort the main scan results list by `Score` desc before rendering (same key Speed Rank uses).
-- Android `ResultsScreen.kt`: sort the actual IP results list by score (today only the per-row domain-tag chips are sorted, not the list).
+### 3. (removed — superseded by section 1; sorting comes for free from `SpeedRankIPs`, no separate UI-side sort code needed on either platform)
 
 ### 4. Fallback endpoint chains — real, known, public, max 3 each
 
@@ -47,7 +47,7 @@ Only Cloudflare is `PinToCandidate` — the other two measure the local network 
 
 ### 5. HTML report
 
-New function alongside the existing `internal/dnsscan/report.go` `writeHTML` pattern: plain `strings.Builder`, inline `<style>` block, `html.EscapeString` for all values, no template engine or new dependency. Ranked table columns: rank #, IP:port, download Mbps, upload Mbps, latency ms, jitter ms, loss %, score, pinned/unpinned indicator. Small inline vanilla JS for click-to-sort columns. One shared function serves both the main scan's results and Speed Rank's results, since they now share the same result shape (`ProbeResult`/Speed Rank result fields align). Written next to existing CSV/text output in `dataDir` on both desktop and Android.
+New `WriteSpeedRankHTML(dataDir string, results []SpeedRankResult) (string, error)` in `internal/scanner`, alongside the existing `internal/dnsscan/report.go` `writeHTML` pattern: plain `strings.Builder`, inline `<style>` block, `html.EscapeString` for all values, no template engine or new dependency. Ranked table columns: rank #, IP:port, download Mbps, upload Mbps, latency ms, jitter ms, loss %, score, pinned/unpinned indicator (derived from `Source`/`UploadSource` == `"cloudflare"`). Small inline vanilla JS for click-to-sort columns. Since the main scan now produces `[]SpeedRankResult` too (section 1), this one writer serves both the main scan's results and the dedicated Speed Rank feature's results. Written next to existing CSV/text output in `dataDir` on both desktop and Android.
 
 ### 6. Remove the IP ceiling; Android auto-chain toggle
 
