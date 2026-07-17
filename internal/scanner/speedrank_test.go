@@ -67,6 +67,23 @@ func TestMeasureUploadFallsBackOnFirstEndpointFailure(t *testing.T) {
 	}
 }
 
+func TestDedupeIPsStripsPortsAndDropsNonIPs(t *testing.T) {
+	// Mirrors what the IP-scan -> speed-test auto-chain feeds in: "ip:port"
+	// tokens plus passed-domain names split in as peers.
+	in := []string{"1.1.1.1:443", "gemini.google.com", "chatgpt.com", "8.8.8.8:443", "instagram.com", "1.1.1.1:443", " 9.9.9.9 "}
+	got := dedupeIPs(in)
+
+	want := map[string]bool{"1.1.1.1": true, "8.8.8.8": true, "9.9.9.9": true}
+	if len(got) != len(want) {
+		t.Fatalf("expected %d unique IPs, got %d: %v", len(want), len(got), got)
+	}
+	for _, ip := range got {
+		if !want[ip] {
+			t.Fatalf("unexpected token survived dedupe: %q (full: %v)", ip, got)
+		}
+	}
+}
+
 func TestDefaultUploadEndpointsOrderAndNames(t *testing.T) {
 	eps := DefaultUploadEndpoints()
 	wantNames := []string{"cloudflare", "postman-echo", "httpbin"}

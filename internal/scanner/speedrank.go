@@ -540,9 +540,17 @@ func dedupeIPs(ips []string) []string {
 		if ip == "" {
 			continue
 		}
-		// Strip an optional :port so callers can pass ip:port endpoints.
-		if host, _, ok := strings.Cut(ip, ":"); ok && net.ParseIP(host) != nil {
+		// Strip an optional :port so callers can pass ip:port endpoints (the IP
+		// scan writes "ip:port" result lines).
+		if host, _, err := net.SplitHostPort(ip); err == nil && net.ParseIP(host) != nil {
 			ip = host
+		}
+		// Drop anything that isn't a bare IP. IP-scan result lines carry the
+		// passed-domain names after a tab; upstream target-splitting turns those
+		// into peer tokens, and they must not be benchmarked as if they were the
+		// found IP.
+		if net.ParseIP(ip) == nil {
+			continue
 		}
 		if _, dup := seen[ip]; dup {
 			continue
