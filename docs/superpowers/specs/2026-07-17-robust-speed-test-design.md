@@ -36,8 +36,7 @@ Add to `internal/scanner/types.go` `ProbeResult`: `DownloadMbps`, `UploadMbps`, 
 1. Cloudflare `speed.cloudflare.com/__down?bytes=N` — `PinToCandidate: true` (unchanged; dials the candidate IP directly, real measurement of that specific IP).
 2. Cachefly `cachefly.cachefly.net/10mb.test` — industry-standard public bandwidth test file (replaces current `/50mb.test`; unpinned — measures the box's general path, not the candidate IP specifically, but real bytes transferred).
 3. Hetzner `speed.hetzner.de/100MB.bin` — official public speed-test file, well known, unpinned.
-
-Remove `google.com/generate_204` (0 bytes returned — measures reachability only, not throughput; this was reported as a no-op).
+4. Google `www.google.com/generate_204` — kept as a **last-resort reachability-only** entry (`Reachability: true`, 0 bytes, no Mbps claimed). Google has no stable public bandwidth-test file, so this isn't counted as a throughput fallback like the other three; it only distinguishes "network is up but every real download endpoint failed" from total failure.
 
 **Upload** (new: `measureUpload` becomes a fallback list, matching the download pattern, instead of a single hardcoded Cloudflare call):
 1. Cloudflare `speed.cloudflare.com/__up` — pinned (unchanged, real).
