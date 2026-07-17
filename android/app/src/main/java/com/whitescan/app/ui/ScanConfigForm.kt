@@ -31,6 +31,9 @@ data class FormState(
     val dnsProtocol: String = "both",     // dnsscan.Options.Protocol: udp | tcp | both | all
     val dnsReference: String = "google",  // truth-table reference resolver
     val dnsTestNearby: Boolean = false,   // expand + rescan the /24 around tunnel-ready hits
+    // Speed test — runs after an IP scan on the IPs it found, ranking them by
+    // download/upload speed and ping (Android only; IP scan only).
+    val speedTestEnabled: Boolean = false,
     // DNSTT end-to-end tunnel test — runs after a DNS scan on its tunnel-ready shortlist.
     val e2eEnabled: Boolean = false,
     val e2eDomain: String = "",
@@ -395,6 +398,29 @@ fun ScanConfigForm(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                }
+            }
+        }
+
+        // ── Speed test (IP scan only) — runs after the scan on the IPs it found ──
+        if (kind == ScanKind.IP) {
+            item {
+                Spacer(Modifier.height(16.dp))
+                HorizontalDivider()
+                Spacer(Modifier.height(12.dp))
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Switch(
+                        checked = form.speedTestEnabled,
+                        onCheckedChange = { onFormChange(form.copy(speedTestEnabled = it)) },
+                    )
+                    Column {
+                        Text("Speed test", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            "After this scan finds clean IPs, benchmark them and rank by download/upload speed and ping (uses extra data)",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
         }

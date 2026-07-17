@@ -7,11 +7,36 @@ import (
 	"sync"
 	"testing"
 	"time"
+
 )
 
 func TestMaxSpeedRankIPsRaised(t *testing.T) {
 	if maxSpeedRankIPs != 2000 {
 		t.Fatalf("expected maxSpeedRankIPs = 2000, got %d", maxSpeedRankIPs)
+	}
+}
+
+// The IP scan's result file lines are "ip:port" optionally followed by a tab
+// and passed-domain names. The Speed Test auto-chain feeds that file to the
+// speed scan as "@path". This verifies the file @-ref is read and the ip:port
+// tokens survive target-splitting (the passed-domain tokens are then dropped
+// downstream by the scanner's dedupeIPs — see TestDedupeIPsStripsPortsAndDropsNonIPs).
+func TestSpeedTestAutoChainReadsIPPortResultFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ip-results.txt")
+	content := "1.1.1.1:443\tgemini.google.com,chatgpt.com\n8.8.8.8:443\tinstagram.com\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	targets := splitTargets("@" + path)
+
+	got := make(map[string]bool)
+	for _, tok := range targets {
+		got[tok] = true
+	}
+	if !got["1.1.1.1:443"] || !got["8.8.8.8:443"] {
+		t.Fatalf("expected ip:port tokens read from result file, got: %v", targets)
 	}
 }
 

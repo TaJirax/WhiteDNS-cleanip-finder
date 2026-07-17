@@ -165,6 +165,28 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                         }
+                        // When an IP scan with the speed-test toggle enabled finishes,
+                        // chain straight into a Speed & Loss rank over the IPs it just
+                        // found (its saved ip:port result file), instead of stopping
+                        // at the IP results.
+                        if (finishedKind == ScanKind.IP && form.speedTestEnabled) {
+                            val ipsPath = scanState.savedPath
+                            if (!ipsPath.isNullOrEmpty()) {
+                                try {
+                                    val dir = currentScanDir().absolutePath
+                                    val speedCfg = form.copy(targets = "@$ipsPath")
+                                        .toEngineConfig(shouldUseConstrainedScanDefaults())
+                                    stopForegroundScanService()
+                                    screen = Screen.Scanning(ScanKind.SPEED)
+                                    startForegroundScanService(ScanKind.SPEED)
+                                    vm.start(ScanKind.SPEED, dir, speedCfg)
+                                    return@LaunchedEffect
+                                } catch (e: Throwable) {
+                                    Log.e("MainActivity", "Failed to start speed test", e)
+                                    // Fall through to showing the IP results below.
+                                }
+                            }
+                        }
                         screen = Screen.Results
                         stopForegroundScanService()
                         // Kick off preview load immediately
