@@ -756,9 +756,6 @@ func (s *Scanner) runThreeWavePipeline(ctx context.Context, endpoints []simpleEn
 	// Network-outage breaker (see optimized pipeline for rationale).
 	var netDownStreak int32
 	const netDownTrip = 15
-	// Bounded pool for the async post-accept transfer benchmark (informational
-	// only; never blocks a worker — see runTransferBenchmarkAsync).
-	benchSem := make(chan struct{}, 3)
 
 	// Reuse previously computed IP set
 	totalIPs := totalIPsInit
@@ -790,7 +787,6 @@ func (s *Scanner) runThreeWavePipeline(ctx context.Context, endpoints []simpleEn
 				return
 			}
 
-			probeStarted := time.Now()
 			sem <- struct{}{}
 			if !s.waitWhilePaused() {
 				<-sem
@@ -799,7 +795,6 @@ func (s *Scanner) runThreeWavePipeline(ctx context.Context, endpoints []simpleEn
 			}
 			result := s.probeIP(ctx, ip, port, probeOpts)
 			<-sem
-			probeLatency := time.Since(probeStarted)
 			// Trip the outage breaker on a burst of device-offline errors.
 			if isDeviceOfflineError(result) {
 				if atomic.AddInt32(&netDownStreak, 1) >= netDownTrip {
@@ -826,9 +821,6 @@ func (s *Scanner) runThreeWavePipeline(ctx context.Context, endpoints []simpleEn
 					passedDomainsStr = ""
 				}
 				s.logf("[ACCEPT] %s:%d status=%s domains=%d/%d domain_score=%d passed=[%s]\n", ip, port, result.Status, result.DomainsTested, result.DomainTotal, result.DomainScore, passedDomainsStr)
-				if !probeOpts.LowBandwidth {
-					s.runTransferBenchmarkAsync(benchSem, ip, port, probeLatency, probeOpts.Timeout)
-				}
 				resultLine := fmt.Sprintf("%s:%d", ip, port)
 				if passedDomainsStr != "" {
 					// Append passed domains after a TAB so the IP:port stays the
