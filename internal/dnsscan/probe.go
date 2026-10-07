@@ -38,6 +38,10 @@ func ProbeUDP(ctx context.Context, resolverIP, domain string, truth *TruthTable,
 
 func probeUDP(ctx context.Context, resolverIP, domain string, truth *TruthTable, timeout time.Duration, dialer *net.Dialer, port int, allowFallback bool) DnsProbeResult {
 	result := DnsProbeResult{Protocol: fmt.Sprintf("UDP/%d", port)}
+	if !waitDNSQuery(ctx, resolverIP) {
+		result.Error = "stopped"
+		return result
+	}
 	hdr, ips, edns, ttfb, injected, err := probeUDPWithFallback(ctx, resolverIP, domain, 1, timeout, dialer, port, truth != nil, allowFallback)
 	result.TTFB = ttfb
 	result.InjectionObserved = injected
@@ -59,6 +63,10 @@ func probeUDP(ctx context.Context, resolverIP, domain string, truth *TruthTable,
 // ProbeTCP sends a DNS A query over TCP.
 func ProbeTCP(ctx context.Context, resolverIP, domain string, truth *TruthTable, timeout time.Duration, dialer *net.Dialer, port int) DnsProbeResult {
 	result := DnsProbeResult{Protocol: fmt.Sprintf("TCP/%d", port)}
+	if !waitDNSQuery(ctx, resolverIP) {
+		result.Error = "stopped"
+		return result
+	}
 	query, txid := buildDnsQuery(domain, 1, true)
 
 	addr := net.JoinHostPort(resolverIP, fmt.Sprintf("%d", port))
@@ -102,6 +110,10 @@ func ProbeTCP(ctx context.Context, resolverIP, domain string, truth *TruthTable,
 // ProbeDoT sends a DNS A query over DNS-over-TLS.
 func ProbeDoT(ctx context.Context, resolverIP, domain string, truth *TruthTable, timeout time.Duration, dialer *net.Dialer, port int) DnsProbeResult {
 	result := DnsProbeResult{Protocol: fmt.Sprintf("DoT/%d", port)}
+	if !waitDNSQuery(ctx, resolverIP) {
+		result.Error = "stopped"
+		return result
+	}
 	query, txid := buildDnsQuery(domain, 1, true)
 
 	addr := net.JoinHostPort(resolverIP, fmt.Sprintf("%d", port))
@@ -145,6 +157,10 @@ func ProbeDoT(ctx context.Context, resolverIP, domain string, truth *TruthTable,
 // ProbeDoH sends a DNS A query via DNS-over-HTTPS (JSON API).
 func ProbeDoH(ctx context.Context, resolverIP, domain string, truth *TruthTable, timeout time.Duration, client *http.Client, port int) DnsProbeResult {
 	result := DnsProbeResult{Protocol: fmt.Sprintf("DoH/%d", port)}
+	if !waitDNSQuery(ctx, resolverIP) {
+		result.Error = "stopped"
+		return result
+	}
 	dohResp, ttfb, err := doDoHQuery(ctx, resolverIP, domain, "A", timeout, client, port)
 	result.TTFB = ttfb
 	if err != nil {
@@ -183,6 +199,10 @@ func ProbeTXTUDP(ctx context.Context, resolverIP, queryName string, timeout time
 
 func probeTXTUDP(ctx context.Context, resolverIP, queryName string, timeout time.Duration, dialer *net.Dialer, port int, allowFallback bool) DnsProbeResult {
 	result := DnsProbeResult{Protocol: fmt.Sprintf("UDP/%d", port)}
+	if !waitDNSQuery(ctx, resolverIP) {
+		result.Error = "stopped"
+		return result
+	}
 	hdr, txts, edns, ttfb, injected, err := probeUDPWithFallback(ctx, resolverIP, queryName, 16, timeout, dialer, port, false, allowFallback)
 	result.TTFB = ttfb
 	result.InjectionObserved = injected
@@ -200,6 +220,10 @@ func probeTXTUDP(ctx context.Context, resolverIP, queryName string, timeout time
 // ProbeTXTTCP sends a TXT query over DNS-over-TCP.
 func ProbeTXTTCP(ctx context.Context, resolverIP, queryName string, timeout time.Duration, dialer *net.Dialer, port int) DnsProbeResult {
 	result := DnsProbeResult{Protocol: fmt.Sprintf("TCP/%d", port)}
+	if !waitDNSQuery(ctx, resolverIP) {
+		result.Error = "stopped"
+		return result
+	}
 	if dialer == nil {
 		dialer = &net.Dialer{Timeout: timeout}
 	}
@@ -215,6 +239,10 @@ func ProbeTXTTCP(ctx context.Context, resolverIP, queryName string, timeout time
 // ProbeTXTDoT sends a TXT query over DNS-over-TLS.
 func ProbeTXTDoT(ctx context.Context, resolverIP, queryName string, timeout time.Duration, dialer *net.Dialer, port int) DnsProbeResult {
 	result := DnsProbeResult{Protocol: fmt.Sprintf("DoT/%d", port)}
+	if !waitDNSQuery(ctx, resolverIP) {
+		result.Error = "stopped"
+		return result
+	}
 	if dialer == nil {
 		dialer = &net.Dialer{Timeout: timeout}
 	}
@@ -255,6 +283,10 @@ func probeTXTStream(conn net.Conn, queryName string, timeout time.Duration, resu
 // ProbeTXTDoH sends a TXT query via DNS-over-HTTPS.
 func ProbeTXTDoH(ctx context.Context, resolverIP, queryName string, timeout time.Duration, client *http.Client, port int) DnsProbeResult {
 	result := DnsProbeResult{Protocol: fmt.Sprintf("DoH/%d", port)}
+	if !waitDNSQuery(ctx, resolverIP) {
+		result.Error = "stopped"
+		return result
+	}
 	dohResp, ttfb, err := doDoHQuery(ctx, resolverIP, queryName, "TXT", timeout, client, port)
 	result.TTFB = ttfb
 	if err != nil {

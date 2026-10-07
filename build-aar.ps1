@@ -34,7 +34,7 @@ $env:GOTOOLCHAIN = "local"
 # Go 1.25+ requires golang.org/x/mobile to be in the module's tool graph before
 # `gomobile bind` will run. Records a tool directive in go.mod (idempotent).
 Write-Host "Ensuring gomobile tool dependency..." -ForegroundColor Cyan
-& go get -tool golang.org/x/mobile/cmd/gobind
+& go get -tool golang.org/x/mobile/cmd/gobind@v0.0.0-20260410095206-2cfb76559b7b
 if ($LASTEXITCODE -ne 0) { Write-Error "go get -tool failed ($LASTEXITCODE)" }
 
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
@@ -48,7 +48,7 @@ $gomobileArgs = @(
     "-o", $outAar,
     "./mobile"
 )
-& gomobile @gomobileArgs
+& go run golang.org/x/mobile/cmd/gomobile @gomobileArgs
 
 if ($LASTEXITCODE -ne 0) { Write-Error "gomobile bind failed ($LASTEXITCODE)" }
 Write-Host "OK -> $outAar" -ForegroundColor Green

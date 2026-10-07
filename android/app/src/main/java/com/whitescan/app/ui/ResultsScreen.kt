@@ -1,5 +1,7 @@
 package com.whitescan.app.ui
 
+import kotlinx.coroutines.launch
+import androidx.compose.material.icons.outlined.Share
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -15,6 +17,10 @@ import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -29,20 +35,26 @@ import com.whitescan.app.ScanUiState
 import com.whitescan.app.ScanViewModel
 import java.io.File
 
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun ResultsScreen(
     state: ScanUiState,
     vm: ScanViewModel,
     onBack: () -> Unit,
     onNewScan: () -> Unit,
+    onInspect: (String) -> Unit = {},
 ) {
     val ctx = LocalContext.current
     val haptic = LocalHapticFeedback.current
+    val snackbar = LocalSnackbar.current
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
 
-    // Load the last 100 lines from disk once when savedPath is known.
-    LaunchedEffect(state.savedPath) {
-        state.savedPath?.let { vm.loadPreview(it) }
+    // Blank query: last 100 lines. Otherwise search the whole file (debounced).
+    var query by rememberSaveable(state.savedPath) { mutableStateOf("") }
+    LaunchedEffect(state.savedPath, query) {
+        val path = state.savedPath ?: return@LaunchedEffect
+        if (query.isNotBlank()) kotlinx.coroutines.delay(300)
+        vm.search(path, query)
     }
 
     Column(
@@ -52,7 +64,6 @@ fun ResultsScreen(
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
 
-        Text("Results", style = MaterialTheme.typography.titleMedium)
 
         if (state.error != null) {
             Card(
@@ -89,14 +100,29 @@ fun ResultsScreen(
             state.savedPath?.let { path ->
                 FilledTonalButton(
                     onClick = { shareFile(ctx, path) },
-                    modifier = Modifier.height(40.dp),
+                    modifier = Modifier.heightIn(min = 48.dp),
                 ) {
-                    Icon(Icons.Default.Share, contentDescription = "Share",
+                    Icon(Icons.Outlined.Share, contentDescription = "Share",
                         modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(4.dp))
                     Text("Share")
                 }
             }
+        }
+
+        if (state.savedPath != null) {
+            val matchText: (@Composable () -> Unit)? = if (state.matches >= 0) {
+                { Text(if (state.matches > state.preview.size) "${state.matches} matches · showing the first ${state.preview.size}" else "${state.matches} match(es)") }
+            } else null
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                label = { Text("Search all results") },
+                placeholder = { Text("IP, port, domain or error") },
+                supportingText = matchText,
+            )
         }
 
         HorizontalDivider()
@@ -129,17 +155,19 @@ fun ResultsScreen(
             }
             display.isEmpty() -> {
                 Text(
-                    if (state.found > 0) "Loading ${state.found} result(s)…" else "No results found.",
+                    if (state.matches == 0) "No results match “$query”." else if (state.found > 0) "Loading ${state.found} result(s)…" else "No results found.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             else -> {
                 Text(
-                    if (state.found > display.size)
-                        "Showing ${display.size} of ${state.found} · long-press an IP to copy"
+                    if (state.matches >= 0)
+                        "Tap a result for details, copy and speed"
+                    else if (state.found > display.size)
+                        "Showing the latest ${display.size} of ${state.found} · search to find any result"
                     else
-                        "Long-press an IP to copy it",
+                        "Tap a result for details, copy and speed",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -147,9 +175,11 @@ fun ResultsScreen(
                     items(display) { line ->
                         ResultRow(
                             line = line,
+                            onInspect = { onInspect(line) },
                             onCopy = { ip ->
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                 copyToClipboard(ctx, ip)
+                                scope.launch { snackbar.copied(ip) }
                             },
                         )
                         HorizontalDivider(
@@ -161,17 +191,19 @@ fun ResultsScreen(
             }
         }
 
+        // Keep the actions at the bottom when there is no list to fill the space.
+        if (awaitingFullList || display.isEmpty()) Spacer(Modifier.weight(1f))
         Row(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier.fillMaxWidth(),
         ) {
             OutlinedButton(
                 onClick = onBack,
-                modifier = Modifier.weight(1f).height(48.dp),
+                modifier = Modifier.weight(1f).heightIn(min = 48.dp),
             ) { Text("Back") }
             Button(
                 onClick = onNewScan,
-                modifier = Modifier.weight(1f).height(48.dp),
+                modifier = Modifier.weight(1f).heightIn(min = 48.dp),
             ) { Text("New Scan") }
         }
     }
@@ -184,25 +216,26 @@ private val IP_PORT_REGEX = Regex("""\b\d{1,3}(?:\.\d{1,3}){3}(?::\d{1,5})?\b"""
 // probe domains, but Speed-Rank / SNI lines embed the IP inside a longer string.
 // Long-press copies ONLY the extracted IP:port — never the whole formatted line
 // (which previously made it look like "the whole screen" was copied).
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
-private fun ResultRow(line: String, onCopy: (String) -> Unit) {
+private fun ResultRow(line: String, onCopy: (String) -> Unit,
+    onInspect: () -> Unit) {
     val tab = line.indexOf('\t')
     val display = (if (tab >= 0) line.substring(0, tab) else line).trim()
     val domains = if (tab >= 0) line.substring(tab + 1).trim() else ""
     // Always copy just the IP:port, extracted from anywhere in the line.
     val copyTarget = IP_PORT_REGEX.find(line)?.value ?: display
 
-    Row(
+    androidx.compose.foundation.layout.FlowRow(
         modifier = Modifier
             .fillMaxWidth()
+            .heightIn(min = 48.dp)
             .combinedClickable(
-                onClick = {},
+                onClick = onInspect,
                 onLongClickLabel = "Copy IP",
                 onLongClick = { onCopy(copyTarget) },
             )
             .padding(vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Text(
@@ -223,7 +256,7 @@ private fun ResultRow(line: String, onCopy: (String) -> Unit) {
                 ) {
                     Text(
                         name,
-                        fontSize = 10.sp,
+                        fontSize = MaterialTheme.typography.bodySmall.fontSize,
                         color = MaterialTheme.colorScheme.onSecondaryContainer,
                         modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
                     )
@@ -232,7 +265,7 @@ private fun ResultRow(line: String, onCopy: (String) -> Unit) {
             if (extra > 0) {
                 Text(
                     "+$extra",
-                    fontSize = 10.sp,
+                    fontSize = MaterialTheme.typography.bodySmall.fontSize,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -273,10 +306,9 @@ private fun shortDomains(raw: String, max: Int): Pair<List<String>, Int> {
 private fun copyToClipboard(ctx: Context, text: String) {
     val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
     cm.setPrimaryClip(ClipData.newPlainText("ip", text))
-    Toast.makeText(ctx, "Copied $text", Toast.LENGTH_SHORT).show()
 }
 
-private fun shareFile(ctx: Context, path: String) {
+internal fun shareFile(ctx: Context, path: String) {
     val file = File(path)
     if (!file.exists()) return
     val uri = try {

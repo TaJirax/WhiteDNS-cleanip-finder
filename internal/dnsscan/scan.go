@@ -29,6 +29,12 @@ type Options struct {
 	// TestNearby expands the /24 of every tunnel-ready resolver and rescans it
 	// (range-scout "Test Nearby IPs").
 	TestNearby bool
+
+	// Optional query rate limit (see rate_limit.go); all zero = unlimited.
+	RateLimitPerSecond            float64 // whole scan
+	RateLimitPerResolverPerSecond float64 // any one resolver
+	RateLimitBurst                int     // back-to-back queries allowed (1 = evenly spaced)
+	TimingJitter                  float64 // 0..1: randomly lengthen gaps
 }
 
 const (
@@ -291,6 +297,9 @@ func mergeHeaderSummary(result *ResolverResult, probe DnsProbeResult) {
 // done values, so UI callbacks do not need their own ordering guard.
 func ScanResolvers(ctx context.Context, ips []string, opts Options, progress func(done, total int, r ResolverResult)) []ResolverResult {
 	opts = opts.withDefaults()
+	if rateLimiterFrom(ctx) == nil { // callers scanning in chunks attach one limiter for the whole scan
+		ctx = WithRateLimiter(ctx, NewRateLimiter(opts.RateLimitPerSecond, opts.RateLimitPerResolverPerSecond, opts.RateLimitBurst, opts.TimingJitter))
+	}
 
 	truth := cachedTruthTable(opts.TargetDomain, opts.TruthProvider)
 

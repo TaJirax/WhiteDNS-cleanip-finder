@@ -1,5 +1,8 @@
 package com.whitescan.app.ui
 
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
@@ -146,7 +149,7 @@ fun AsnSearchScreen(
                 .padding(horizontal = 16.dp, vertical = 8.dp)
                 .focusRequester(focusRequester),
             placeholder = { Text("Search ASN name or number…") },
-            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+            leadingIcon = { Icon(ScannerIcons.Search, contentDescription = null) },
             singleLine = true,
         )
 
@@ -259,7 +262,9 @@ fun AsnSearchScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         // Tap = toggle select/deselect; long-press = select with haptic
+                        .semantics { stateDescription = if (isSelected) "Selected" else "Not selected" }
                         .combinedClickable(
+                            role = Role.Checkbox,
                             onClick = {
                                 if (isSelected) selected.remove(row.asn)
                                 else selected[row.asn] = row
@@ -276,13 +281,7 @@ fun AsnSearchScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    Icon(
-                        if (isSelected) Icons.Default.CheckBox else Icons.Default.CheckBoxOutlineBlank,
-                        contentDescription = if (isSelected) "Selected" else "Not selected",
-                        tint = if (isSelected) MaterialTheme.colorScheme.primary
-                               else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(24.dp),
-                    )
+                    Checkbox(checked = isSelected, onCheckedChange = null)
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
                             row.name,
@@ -313,7 +312,7 @@ fun AsnSearchScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(8.dp)
-                .height(48.dp),
+                .heightIn(min = 48.dp),
         ) { Text("Cancel") }
     }
 }

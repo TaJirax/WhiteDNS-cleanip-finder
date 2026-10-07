@@ -22,7 +22,10 @@ require (
 	github.com/templexxx/cpu v0.1.0 // indirect
 	github.com/templexxx/xorsimd v0.4.2 // indirect
 	github.com/tjfoc/gmsm v1.4.1 // indirect
+	golang.org/x/mobile v0.0.0-20260410095206-2cfb76559b7b // indirect
+	golang.org/x/mod v0.37.0 // indirect
 	golang.org/x/net v0.56.0 // indirect
+	golang.org/x/tools v0.47.0 // indirect
 )
 
 require (
@@ -48,3 +51,5 @@ require (
 	golang.org/x/sys v0.47.0
 	golang.org/x/text v0.40.0 // indirect
 )
+
+tool golang.org/x/mobile/cmd/gobind

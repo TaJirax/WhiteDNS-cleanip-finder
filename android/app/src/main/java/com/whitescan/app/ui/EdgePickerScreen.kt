@@ -62,15 +62,6 @@ fun EdgePickerScreen(
                 .padding(horizontal = 20.dp, vertical = 16.dp),
         ) {
             Text(
-                "EDGE NETWORKS",
-                fontFamily = FontFamily.Monospace,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 3.sp,
-                color = CyanAccent,
-            )
-            Spacer(Modifier.height(6.dp))
-            Text(
                 "Pick a platform. WhiteDNS resolves the hostnames it serves and scans the addresses behind them first, then its wider published ranges.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -125,7 +116,7 @@ fun EdgePickerScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(8.dp)
-                .height(48.dp),
+                .heightIn(min = 48.dp),
         ) { Text("Cancel") }
     }
 }
@@ -138,17 +129,15 @@ private fun EdgeProviderItem(
     enabled: Boolean,
     onClick: () -> Unit,
 ) {
-    // Amber marks a platform that publishes its ranges, so the scan is long;
-    // cyan marks one whose targets come from DNS alone, so it is short. Same
-    // meaning the scan form gives those colours: amber is what costs you.
+    // Honey marks a platform that publishes its ranges, so the scan is long;
+    // the accent marks one whose targets come from DNS alone, so it is short.
+    // Same meaning the scan form gives those colours: honey is what costs you.
     val accent = if (row.publishesRanges) Amber else CyanAccent
-    val ruleColor = if (resolving) accent else accent.copy(alpha = 0.45f)
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 72.dp)
-            .clickable(enabled = enabled, onClick = onClick)
-            .drawBehind { drawRect(color = ruleColor, size = Size(3.dp.toPx(), size.height)) },
+            .clickable(enabled = enabled, onClick = onClick),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(

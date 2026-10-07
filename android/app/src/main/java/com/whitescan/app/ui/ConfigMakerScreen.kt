@@ -1,5 +1,7 @@
 package com.whitescan.app.ui
 
+import androidx.compose.material.icons.outlined.ContentPaste
+import androidx.compose.material.icons.outlined.Share
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
@@ -56,13 +58,13 @@ fun ConfigMakerScreen(dataDir: String) {
                 selected = mode == CmMode.REWRITE,
                 onClick = { mode = CmMode.REWRITE; resultPath = null; error = null },
                 label = { Text("Rewrite configs") },
-                modifier = Modifier.height(40.dp),
+                modifier = Modifier.heightIn(min = 48.dp),
             )
             FilterChip(
                 selected = mode == CmMode.EXTRACT,
                 onClick = { mode = CmMode.EXTRACT; resultPath = null; error = null },
                 label = { Text("Extract IP:ports") },
-                modifier = Modifier.height(40.dp),
+                modifier = Modifier.heightIn(min = 48.dp),
             )
         }
 
@@ -127,7 +129,7 @@ fun ConfigMakerScreen(dataDir: String) {
                 }
             },
             enabled = !busy && configs.isNotBlank(),
-            modifier = Modifier.fillMaxWidth().height(50.dp),
+            modifier = Modifier.fillMaxWidth().heightIn(min = 50.dp),
         ) {
             if (busy) CircularProgressIndicator(
                 modifier = Modifier.size(20.dp), strokeWidth = 2.dp,
@@ -151,15 +153,15 @@ fun ConfigMakerScreen(dataDir: String) {
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 FilledTonalButton(onClick = { shareCmFile(ctx, path) },
-                    modifier = Modifier.height(40.dp)) {
-                    Icon(Icons.Default.Share, contentDescription = "Share",
+                    modifier = Modifier.heightIn(min = 48.dp)) {
+                    Icon(Icons.Outlined.Share, contentDescription = "Share",
                         modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(4.dp))
                     Text("Share")
                 }
             }
             resultPreview.forEach { line ->
-                Text(line, fontSize = 11.sp, fontFamily = FontFamily.Monospace,
+                Text(line, fontSize = MaterialTheme.typography.bodySmall.fontSize, fontFamily = FontFamily.Monospace,
                     color = MintGreen, modifier = Modifier.padding(vertical = 2.dp))
             }
         }
@@ -189,7 +191,7 @@ private fun LabeledPasteField(
         FilledTonalIconButton(
             onClick = onPaste,
             modifier = Modifier.size(48.dp).align(Alignment.CenterVertically),
-        ) { Icon(Icons.Default.ContentPaste, contentDescription = "Paste") }
+        ) { Icon(Icons.Outlined.ContentPaste, contentDescription = "Paste") }
     }
 }
 

@@ -102,7 +102,7 @@ func renderMenuTitle(width int, logs int) string {
 	meta := sDim.Render(fmt.Sprintf("logs:%d  %s", logs, time.Now().Format("15:04:05")))
 
 	if width < 72 {
-		line := renderGradientText("WHITEDNS v1.4.5", brandColors, true)
+		line := renderGradientText("WHITEDNS v1.4.6", brandColors, true)
 		credit := renderGradientText("developed by TAjirax", devColors, false)
 		return lipgloss.PlaceHorizontal(width, lipgloss.Center, line) + "\n" +
 			lipgloss.PlaceHorizontal(width, lipgloss.Center, credit) + "\n" +
@@ -131,7 +131,7 @@ func renderMenuTitle(width int, logs int) string {
 		out.WriteString(lipgloss.PlaceHorizontal(width, lipgloss.Center, renderGradientText(line, brandColors, true)))
 		out.WriteString("\n")
 	}
-	tagline := renderGradientText("v1.4.5  -  developed by TAjirax", devColors, true)
+	tagline := renderGradientText("v1.4.6  -  developed by TAjirax", devColors, true)
 	out.WriteString(lipgloss.PlaceHorizontal(width, lipgloss.Center, tagline))
 	out.WriteString("\n")
 	out.WriteString(lipgloss.PlaceHorizontal(width, lipgloss.Center, meta))

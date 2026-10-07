@@ -15,6 +15,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"whitedns-go/internal/antidpi"
 )
 
 const (
@@ -72,10 +73,11 @@ var (
 
 // ProxyScanOptions controls discovery and verification of HTTP/SOCKS5 proxies.
 type ProxyScanOptions struct {
-	Ports       []int
-	Discovery   string
-	Concurrency int
-	Timeout     time.Duration
+	ProxyTestURL string
+	Ports        []int
+	Discovery    string
+	Concurrency  int
+	Timeout      time.Duration
 	// TransferModel selects which transfer benchmark implementation to use.
 	// Valid values: "old" (default) or "brrr" (new fast model).
 	TransferModel string
@@ -99,25 +101,31 @@ type proxyVerifier interface {
 	defaultTimeout() time.Duration
 }
 
-type httpVerifier struct{}
+type httpVerifier struct {
+	dpi     antidpi.Options
+	testURL string
+}
 
 func (httpVerifier) defaultPorts() []int           { return defaultHTTPProxyPorts }
 func (httpVerifier) defaultTimeout() time.Duration { return defaultHTTPScanTimeout }
 
-type socks5Verifier struct{}
+type socks5Verifier struct {
+	dpi     antidpi.Options
+	testURL string
+}
 
 func (socks5Verifier) defaultPorts() []int           { return defaultSOCKS5ProxyPorts }
 func (socks5Verifier) defaultTimeout() time.Duration { return defaultSOCKS5ScanTimeout }
 
 // ScanHTTPProxies discovers and verifies HTTP proxies without touching routing state.
 func (s *Scanner) ScanHTTPProxies(rawTargets []string, opts ProxyScanOptions) ([]string, error) {
-	results, err := s.scanProxies(rawTargets, opts, httpVerifier{})
+	results, err := s.scanProxies(rawTargets, opts, httpVerifier{dpi: s.antiDPIOptions(), testURL: opts.ProxyTestURL})
 	return formatProxyScanResults(results), err
 }
 
 // ScanSOCKS5Proxies discovers and verifies SOCKS5 proxies without touching routing state.
 func (s *Scanner) ScanSOCKS5Proxies(rawTargets []string, opts ProxyScanOptions) ([]string, error) {
-	results, err := s.scanProxies(rawTargets, opts, socks5Verifier{})
+	results, err := s.scanProxies(rawTargets, opts, socks5Verifier{dpi: s.antiDPIOptions(), testURL: opts.ProxyTestURL})
 	return formatProxyScanResults(results), err
 }
 
@@ -279,6 +287,9 @@ func (s *Scanner) withTargetPorts(ports []int, fn func() ([]string, error)) ([]s
 }
 
 func (s *Scanner) scanProxyCandidates(candidates []string, concurrency int, timeout time.Duration, verifier proxyVerifier, transferModel string, liteMode bool) []ProxyScanResult {
+	if v, ok := verifier.(httpVerifier); ok && v.dpi.Enabled {
+		liteMode = true
+	}
 	total := len(candidates)
 	if total == 0 {
 		return []ProxyScanResult{}
@@ -748,7 +759,10 @@ func probeSOCKS5ProxyHost(endpoint, host string, timeout time.Duration) bool {
 	return readProxyHTTPResponse(conn, false, true)
 }
 
-func (httpVerifier) verify(endpoint string, timeout time.Duration) bool {
+func (v httpVerifier) verify(endpoint string, timeout time.Duration) bool {
+	if v.dpi.Enabled && !VerifyProxyTLS(endpoint, "http", v.testURL, timeout, v.dpi) {
+		return false
+	}
 	w1, w2, w3 := waveTimeouts(timeout)
 	if !httpWave1(endpoint, w1) {
 		return false
@@ -853,7 +867,10 @@ func readSOCKS5Reply(reader io.Reader) bool {
 	return err == nil
 }
 
-func (socks5Verifier) verify(endpoint string, timeout time.Duration) bool {
+func (v socks5Verifier) verify(endpoint string, timeout time.Duration) bool {
+	if v.dpi.Enabled && !VerifyProxyTLS(endpoint, "socks5", v.testURL, timeout, v.dpi) {
+		return false
+	}
 	conn, err := net.DialTimeout("tcp", endpoint, timeout)
 	if err != nil {
 		return false

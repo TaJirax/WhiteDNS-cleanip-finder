@@ -2,6 +2,7 @@ package mobile
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"net"
 	"os"
@@ -15,7 +16,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"whitedns-go/internal/asn"
 	"whitedns-go/internal/asnexport"
 	"whitedns-go/internal/dnsscan"
 	"whitedns-go/internal/dnstt"
@@ -420,6 +420,11 @@ func StartIPScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 		cfg = &ScanConfig{}
 	}
 	sc := scanner.NewScanner(nil)
+	if err := sc.ConfigureAntiDPI(cfg.AntiDPI, fragmentSize(cfg), cfg.DPIFragmentDelayMs); err != nil {
+		h := newScanHandle(sc)
+		go l.OnDone("", err.Error())
+		return h
+	}
 	h := newScanHandle(sc)
 
 	liteMode := effectiveLiteMode(cfg)
@@ -492,40 +497,55 @@ func StartIPScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 	go func() {
 		defer sc.SetLogCallback(nil)
 		defer lf.close()
+		if cfg.TargetType == "domain" {
+			resolved, err := resolveDomainTargets(h.ctx, targets)
+			if err != nil {
+				l.OnDone("", err.Error())
+				return
+			}
+			targets = resolved
+		}
 
-		// 1. Stream-expand all CIDRs/IPs to a temp file (low RAM, full coverage).
-		// Lite mode uses a tiny dedup set so even huge ASNs stage with minimal RAM
-		// (a single ASN has no internal duplicates, so nothing is lost).
+		// A bounded producer starts probes as soon as a chunk is ready. Counting
+		// never blocks scanning; the exact total is published only when known.
 		dedupCap := stageDedupCap
 		if liteMode {
 			dedupCap = liteDedupCap
 		}
-		tmpPath := filepath.Join(dataDir, "tmp", fmt.Sprintf("targets-%d.txt", time.Now().UnixNano()))
-		totalIPs, err := expandTargetsToFile(targets, tmpPath, dedupCap)
-		if err != nil {
-			l.OnDone("", "could not stage targets: "+err.Error())
-			return
+		var knownTotal, emittedTotal atomic.Int64
+		source := make(chan string, chunkSize)
+		producerCtx, cancelProducer := context.WithCancel(h.ctx)
+		defer cancelProducer()
+		expansionErr := make(chan error, 1)
+		go func() {
+			defer close(source)
+			total, err := walkTargets(producerCtx, targets, dedupCap, func(line string) error {
+				select {
+				case source <- line:
+					emittedTotal.Add(1)
+					return nil
+				case <-producerCtx.Done():
+					return producerCtx.Err()
+				}
+			})
+			if err == nil {
+				knownTotal.Store(int64(total))
+			}
+			expansionErr <- err
+		}()
+		if cfg.CountTotal {
+			go func() {
+				total, err := walkTargets(producerCtx, targets, dedupCap, func(string) error { return nil })
+				if err == nil {
+					knownTotal.Store(int64(total))
+				}
+			}()
 		}
-		defer os.Remove(tmpPath)
-		if totalIPs == 0 {
-			l.OnDone("", "no IPs expanded from CIDRs")
-			return
-		}
-		stagedMsg := fmt.Sprintf("[IP-SCAN-START] targets=%d staged_ips=%d ports=%d total_probes=%d concurrency=%d lite=%v low_bandwidth=%v",
-			len(targets), totalIPs, len(ports), totalIPs*len(ports), conc, liteMode, lowBandwidth)
-		lf.write(stagedMsg)
-		l.OnLog(stagedMsg)
-
-		file, err := os.Open(tmpPath)
-		if err != nil {
-			l.OnDone("", err.Error())
-			return
-		}
-		defer file.Close()
-
+		totalIPs, totalEndpoints := 0, 0
+		lf.write(fmt.Sprintf("[IP-SCAN-START] streaming targets=%d ports=%d concurrency=%d lite=%v low_bandwidth=%v", len(targets), len(ports), conc, liteMode, lowBandwidth))
 		rf, _ := openResultFile(dataDir, "ip")
 		resultThrottle := newThrottle(250 * time.Millisecond)
-		totalEndpoints := totalIPs * len(ports)
+
 		start := time.Now()
 		etaEst := newETATracker()
 		processedBase := 0 // endpoints fully scanned in prior chunks
@@ -540,8 +560,8 @@ func StartIPScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 			progressCb := func(processed, _ /*totalProbes*/, accepted int, currentIP string, _ int) {
 				if !h.isStopped() {
 					done := processedBase + processed
-					l.OnProgress(done, totalEndpoints, foundTotal+accepted, totalIPs,
-						currentIP, etaEst.eta(done, totalEndpoints))
+					l.OnProgress(done, int(knownTotal.Load())*len(ports), foundTotal+accepted, int(emittedTotal.Load()),
+						currentIP, etaEst.eta(done, int(knownTotal.Load())*len(ports)))
 				}
 			}
 			results, scanErr := sc.ScanIPsWithProgress(chunk, makeOpts(), progressCb)
@@ -558,43 +578,46 @@ func StartIPScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 			processedBase += len(chunk) * len(ports)
 		}
 
-		// 3. Read the staged IP file chunk by chunk.
-		fileScanner := bufio.NewScanner(file)
-		fileScanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		chunk := make([]string, 0, chunkSize)
-		for fileScanner.Scan() {
+		for line := range source {
 			if h.isStopped() {
+				cancelProducer()
 				break
 			}
 			for h.isPaused() && !h.isStopped() {
 				time.Sleep(200 * time.Millisecond)
 			}
-			line := strings.TrimSpace(fileScanner.Text())
-			if line == "" {
-				continue
+			if h.isStopped() {
+				cancelProducer()
+				break
 			}
 			chunk = append(chunk, line)
 			if len(chunk) >= chunkSize {
 				runChunk(chunk)
-				chunk = chunk[:0]
-				if liteMode {
-					// Reclaim the chunk's memory promptly so peak RAM stays low on
-					// weak devices, then breathe before the next chunk.
-					runtime.GC()
-					time.Sleep(300 * time.Millisecond)
-				} else if pause > 0 && !h.isStopped() {
-					time.Sleep(pause) // ease bandwidth between chunks
+				if pause > 0 {
+					time.Sleep(pause)
 				}
+				chunk = chunk[:0]
 			}
 		}
 		if !h.isStopped() {
-			runChunk(chunk) // final partial chunk
+			runChunk(chunk)
 		}
-		if err := fileScanner.Err(); err != nil {
-			warnMsg := "[IP-SCAN] staged-IP read error, coverage may be truncated: " + err.Error()
-			lf.write(warnMsg)
-			l.OnLog(warnMsg)
+		cancelProducer()
+		if err := <-expansionErr; err != nil && !h.isStopped() {
+			l.OnLog("[IP-SCAN] target expansion error: " + err.Error())
 		}
+		totalIPs = int(knownTotal.Load())
+		if totalIPs == 0 {
+			totalIPs = int(emittedTotal.Load())
+		}
+		totalEndpoints = totalIPs * len(ports)
+		if totalIPs == 0 && !h.isStopped() {
+			rf.close()
+			l.OnDone("", "no IPs expanded from targets")
+			return
+		}
+		l.OnProgress(processedBase, totalEndpoints, foundTotal, totalIPs, "", 0)
 
 		// Whether the scan finished or was stopped, partial results are already on
 		// disk — report success with the saved path so the Results screen shows
@@ -624,32 +647,53 @@ func StartIPScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 // so its dedup set finds nothing — Lite mode therefore passes a tiny cap (or 0
 // to disable) to stage huge ASNs with almost no RAM, WITHOUT dropping any IPs.
 func expandTargetsToFile(targets []string, path string, dedupCap int) (int, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return 0, err
 	}
-	f, err := os.Create(path)
+	file, err := os.Create(path)
 	if err != nil {
 		return 0, err
 	}
-	w := bufio.NewWriterSize(f, 64*1024)
+	defer file.Close()
+	writer := bufio.NewWriterSize(file, 64*1024)
+	count, err := walkTargets(context.Background(), targets, dedupCap, func(line string) error { _, err := fmt.Fprintln(writer, line); return err })
+	if err != nil {
+		return count, err
+	}
+	if err = writer.Flush(); err != nil {
+		return count, err
+	}
+	return count, file.Close()
+}
+
+func walkTargets(ctx context.Context, targets []string, dedupCap int, consume func(string) error) (int, error) {
 	count := 0
-	// De-duplicate addresses so overlapping CIDRs/ASNs (e.g. selecting both a /16
-	// and a /24 inside it) don't scan the same IP twice. Result-neutral — only
-	// redundant work is skipped. dedupCap <= 0 disables it entirely (lowest RAM).
+	// IPv4 IPs and CIDRs become integer spans that are merged before streaming,
+	// so overlapping CIDRs/ASNs (a /16 and a /24 inside it) are scanned once —
+	// exactly, with no RAM-bounded seen-set — and each address is formatted
+	// into one reusable buffer. Endpoints and IPv6 samples keep the seen-set,
+	// which dedupCap <= 0 disables entirely (lowest RAM).
 	var seen map[string]struct{}
 	if dedupCap > 0 {
 		seen = make(map[string]struct{}, 1024)
 	}
-	emit := func(line string) {
+	emit := func(line string) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if seen != nil && len(seen) < dedupCap {
 			if _, dup := seen[line]; dup {
-				return
+				return nil
 			}
 			seen[line] = struct{}{}
 		}
-		fmt.Fprintln(w, line)
+		if err := consume(line); err != nil {
+			return err
+		}
 		count++
+		return nil
 	}
+	var spans []asnexport.IPv4Span
 	for _, t := range targets {
 		t = strings.TrimSpace(t)
 		if t == "" {
@@ -657,39 +701,57 @@ func expandTargetsToFile(targets []string, path string, dedupCap int) (int, erro
 		}
 		// ip:port passthrough
 		if host, _, err := net.SplitHostPort(t); err == nil && net.ParseIP(host) != nil {
-			emit(t)
+			if err := emit(t); err != nil {
+				return count, err
+			}
 			continue
 		}
 		// bare IP
-		if net.ParseIP(t) != nil {
-			emit(t)
+		if ip := net.ParseIP(t); ip != nil {
+			if v4 := ip.To4(); v4 != nil {
+				v := uint64(v4[0])<<24 | uint64(v4[1])<<16 | uint64(v4[2])<<8 | uint64(v4[3])
+				spans = append(spans, asnexport.IPv4Span{First: v, Last: v})
+				continue
+			}
+			if err := emit(t); err != nil {
+				return count, err
+			}
 			continue
 		}
-		// CIDR — stream each address
 		_, ipnet, perr := net.ParseCIDR(t)
 		if perr != nil {
 			continue
 		}
-		if ipnet.IP.To4() == nil {
+		span, ok := asnexport.IPv4SpanOf(ipnet)
+		if !ok {
 			for _, sample := range tlsprobe.ExpandTargets([]string{t}) {
-				emit(sample)
+				if err := emit(sample); err != nil {
+					return count, err
+				}
 			}
 			continue
 		}
-		cur := make(net.IP, len(ipnet.IP))
-		copy(cur, ipnet.IP.Mask(ipnet.Mask))
-		emitted := 0
-		for ipnet.Contains(cur) && emitted < perCIDRMaxIPs {
-			emit(cur.String())
-			emitted++
-			incIP(cur)
+		if span.Last-span.First+1 > perCIDRMaxIPs { // same per-CIDR cap as before
+			span.Last = span.First + perCIDRMaxIPs - 1
+		}
+		spans = append(spans, span)
+	}
+	buf := make([]byte, 0, 15)
+	done := ctx.Done() // a non-blocking receive per address: Stop takes effect at once
+	for _, span := range asnexport.MergeIPv4Spans(spans) {
+		for v := span.First; v <= span.Last; v++ {
+			select {
+			case <-done:
+				return count, ctx.Err()
+			default:
+			}
+			if err := consume(string(asnexport.AppendIPv4(buf[:0], uint32(v)))); err != nil {
+				return count, err
+			}
+			count++
 		}
 	}
-	if err := w.Flush(); err != nil {
-		f.Close()
-		return count, err
-	}
-	return count, f.Close()
+	return count, nil
 }
 
 func expandTargetsLimited(targets []string, limit int) []string {
@@ -770,6 +832,11 @@ func startProxyScan(dataDir, kind string, cfg *ScanConfig, l ScanListener) *Scan
 		cfg = &ScanConfig{}
 	}
 	sc := scanner.NewScanner(nil)
+	if err := sc.ConfigureAntiDPI(cfg.AntiDPI, fragmentSize(cfg), cfg.DPIFragmentDelayMs); err != nil {
+		h := newScanHandle(sc)
+		go l.OnDone("", err.Error())
+		return h
+	}
 	h := newScanHandle(sc)
 
 	liteMode := effectiveLiteMode(cfg)
@@ -787,6 +854,7 @@ func startProxyScan(dataDir, kind string, cfg *ScanConfig, l ScanListener) *Scan
 		Concurrency:   conc,
 		Timeout:       timeout,
 		TransferModel: strings.TrimSpace(cfg.TransferModel),
+		ProxyTestURL:  cfg.ProxyTestURL,
 		LiteMode:      liteMode,
 	}
 
@@ -1249,6 +1317,12 @@ func StartDNSScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 		TruthProvider: reference,
 		ScanDepth:     scanDepth,
 	}
+	if cfg.DNSRateLimit < 0 || cfg.DNSRateLimitPerResolver < 0 || cfg.DNSTimingJitter < 0 || cfg.DNSTimingJitter > 1 {
+		go l.OnDone("", "DNS rate limit: use nonnegative rates and jitter 0–1")
+		return h
+	}
+	// One limiter for every chunk, so chunk boundaries keep the spacing.
+	scanCtx := dnsscan.WithRateLimiter(h.ctx, dnsscan.NewRateLimiter(cfg.DNSRateLimit, cfg.DNSRateLimitPerResolver, int(cfg.DNSRateBurst), cfg.DNSTimingJitter))
 
 	chunkSize := chunkIPCount
 	if liteMode {
@@ -1364,7 +1438,7 @@ func StartDNSScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 			if len(chunk) == 0 {
 				return
 			}
-			results := dnsscan.ScanResolvers(h.ctx, chunk, opts, makeProgress(totalIPs))
+			results := dnsscan.ScanResolvers(scanCtx, chunk, opts, makeProgress(totalIPs))
 			all = append(all, results...)
 			processedBase += len(chunk)
 			flushReports() // persist this chunk's results immediately (survives a kill)
@@ -1449,7 +1523,7 @@ func StartDNSScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 						end = len(nearby)
 					}
 					sub := nearby[i:end]
-					results := dnsscan.ScanResolvers(h.ctx, sub, opts, makeProgress(totalWithNearby))
+					results := dnsscan.ScanResolvers(scanCtx, sub, opts, makeProgress(totalWithNearby))
 					for j := range results {
 						results[j].Nearby = true
 					}
@@ -1653,7 +1727,7 @@ func TunnelReadyIPsPath(dnsReportPath string) string {
 // ExportASN expands all ASNs matching query into a flat IP list on disk under
 // {dataDir}/asn_exports/. Returns the output file path.
 func ExportASN(dataDir, query string) (string, error) {
-	eng := asn.NewASNEngine(dataDir)
+	eng := cachedASNEngine(dataDir)
 	if err := eng.Load(); err != nil {
 		return "", err
 	}
@@ -1676,7 +1750,7 @@ func ExportASN(dataDir, query string) (string, error) {
 // the legacy IPv4 behavior; the GUI may prepend an ASN-family control prefix.
 func ExpandASNs(dataDir, asnIDs string) (string, error) {
 	family, asnIDs := parseASNFamilyQuery(asnIDs)
-	eng := asn.NewASNEngine(dataDir)
+	eng := cachedASNEngine(dataDir)
 	var loadErr error
 	if family == "ipv4" {
 		loadErr = eng.LoadIPv4()
@@ -1784,7 +1858,7 @@ func asnSearchRows(dataDir, query string, limit int, offset int) (string, error)
 }
 
 func asnSearchRowsFamily(dataDir, query string, limit int, offset int, family string) (string, error) {
-	eng := asn.NewASNEngine(dataDir)
+	eng := cachedASNEngine(dataDir)
 	var loadErr error
 	if family == "ipv4" {
 		loadErr = eng.LoadIPv4()
@@ -1817,4 +1891,11 @@ func asnSearchRowsFamily(dataDir, query string, limit int, offset int, family st
 		fmt.Fprintf(&b, "%s\t%s\t%d\n", g.ASN, g.Name, g.SubnetCount)
 	}
 	return b.String(), nil
+}
+
+func fragmentSize(cfg *ScanConfig) int {
+	if cfg.DPIFragmentSize < 1 {
+		return 64
+	}
+	return cfg.DPIFragmentSize
 }

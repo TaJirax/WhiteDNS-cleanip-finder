@@ -23,6 +23,7 @@ type ScanHandle struct {
 }
 
 func newScanHandle(sc *scanner.Scanner) *ScanHandle {
+	releaseASNCache() // scans get the picker's ASN tables' memory back
 	ctx, cancel := context.WithCancel(context.Background())
 	return &ScanHandle{ctx: ctx, cancel: cancel, sc: sc}
 }

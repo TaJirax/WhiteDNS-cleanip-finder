@@ -1,5 +1,9 @@
 package com.whitescan.app.ui
 
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -44,7 +48,7 @@ fun ScanningScreen(
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
 
-        // ── Progress bar (cyan → green → orange gradient) ──────────────────
+        // ── Progress bar: the desktop "boba" fill, brown sugar → accent → honey ──
         val pct = if (state.total > 0) state.processed.toFloat() / state.total else 0f
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(
@@ -52,7 +56,7 @@ fun ScanningScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Text(
-                    "${(pct * 100).toInt()}%  ${state.processed}/${state.total}",
+                    if(state.total>0) "${(pct * 100).toInt()}%  ${state.processed}/${state.total}" else "${state.processed} checked · discovering total",
                     style = MaterialTheme.typography.bodySmall,
                 )
                 if (state.etaSec > 0) {
@@ -60,11 +64,23 @@ fun ScanningScreen(
                     Text("ETA ${m}m${s}s", style = MaterialTheme.typography.bodySmall)
                 }
             }
-            Box(
+            val track = MaterialTheme.colorScheme.surfaceContainerHighest
+            val step = (pct * 10).toInt() * 10
+            val spoken = if (state.total > 0) "Scan $step percent, ${state.found} found" else "Scanning, ${state.found} found"
+            Box(Modifier.semantics { liveRegion = LiveRegionMode.Polite; contentDescription = spoken })
+            if (state.total <= 0 && state.running) {
+                // Total still being counted: indeterminate, as on desktop.
+                LinearProgressIndicator(
+                    modifier = Modifier.fillMaxWidth().height(10.dp),
+                    color = MaterialTheme.colorScheme.primary,
+                    trackColor = track,
+                    strokeCap = androidx.compose.ui.graphics.StrokeCap.Round,
+                )
+            } else Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(8.dp)
-                    .background(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.shapes.small),
+                    .height(10.dp)
+                    .background(track, androidx.compose.foundation.shape.CircleShape),
             ) {
                 if (pct > 0f) {
                     Box(
@@ -73,16 +89,11 @@ fun ScanningScreen(
                             .fillMaxHeight()
                             .background(
                                 Brush.horizontalGradient(
-                                    // TUI gradient stops: #00d1ff → #7fff00 → #ffb400 → #ff4081 → #8a2be2
-                                    listOf(
-                                        Color(0xFF00D1FF),
-                                        Color(0xFF7FFF00),
-                                        Color(0xFFFFB400),
-                                        Color(0xFFFF4081),
-                                        Color(0xFF8A2BE2),
-                                    )
+                                    0f to ScannerPalette.primaryStrong,
+                                    .7f to MaterialTheme.colorScheme.primary,
+                                    1f to ScannerPalette.honey,
                                 ),
-                                MaterialTheme.shapes.small,
+                                androidx.compose.foundation.shape.CircleShape,
                             ),
                     )
                 }
@@ -100,13 +111,16 @@ fun ScanningScreen(
 
         // ── Current target ─────────────────────────────────────────────────
         if (state.currentIP.isNotEmpty()) {
-            Text(
-                "▶ ${state.currentIP}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.primary,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Icon(ScannerIcons.Play, contentDescription = "Now probing", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(14.dp))
+                Text(
+                    state.currentIP,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
 
         // ── Live hits (last 6) ─────────────────────────────────────────────
@@ -118,8 +132,8 @@ fun ScanningScreen(
             )
             state.liveResults.takeLast(6).forEach { line ->
                 Text(
-                    "✓ $line",
-                    fontSize = 11.sp,
+                    line,
+                    fontSize = MaterialTheme.typography.bodySmall.fontSize,
                     fontFamily = FontFamily.Monospace,
                     color = MintGreen,
                     maxLines = 1,
@@ -145,7 +159,7 @@ fun ScanningScreen(
             items(state.logs) { line ->
                 Text(
                     line,
-                    fontSize = 10.sp,
+                    fontSize = MaterialTheme.typography.bodySmall.fontSize,
                     fontFamily = FontFamily.Monospace,
                     lineHeight = 14.sp,
                     softWrap = false,
@@ -161,10 +175,10 @@ fun ScanningScreen(
         ) {
             OutlinedButton(
                 onClick = onPauseResume,
-                modifier = Modifier.weight(1f).height(48.dp),
+                modifier = Modifier.weight(1f).heightIn(min = 48.dp),
             ) {
                 Icon(
-                    if (state.paused) Icons.Default.PlayArrow else Icons.Default.Pause,
+                    if (state.paused) ScannerIcons.Play else ScannerIcons.Pause,
                     contentDescription = null,
                     modifier = Modifier.size(20.dp),
                 )
@@ -173,13 +187,15 @@ fun ScanningScreen(
             }
             Button(
                 onClick = onStop,
+                // Desktop danger button: strawberry on a soft strawberry tint.
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.error,
+                    containerColor = MaterialTheme.colorScheme.errorContainer,
+                    contentColor = MaterialTheme.colorScheme.onErrorContainer,
                 ),
-                modifier = Modifier.weight(1f).height(48.dp),
+                modifier = Modifier.weight(1f).heightIn(min = 48.dp),
             ) {
                 Icon(
-                    Icons.Default.Stop,
+                    ScannerIcons.Stop,
                     contentDescription = null,
                     modifier = Modifier.size(20.dp),
                 )
@@ -191,7 +207,7 @@ fun ScanningScreen(
         if (state.done) {
             Button(
                 onClick = onViewResults,
-                modifier = Modifier.fillMaxWidth().height(52.dp),
+                modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
             ) {
                 Text("View Results (${state.found})")
             }

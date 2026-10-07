@@ -74,6 +74,10 @@ func detectHijack(ctx context.Context, ip string, timeout time.Duration, dialer 
 
 func probeNegativeUDP(ctx context.Context, resolverIP, name string, timeout time.Duration, dialer *net.Dialer, port int) hijackObservation {
 	result := hijackObservation{Transport: "udp", Name: name}
+	if !waitDNSQuery(ctx, resolverIP) {
+		result.Error = "stopped"
+		return result
+	}
 	if dialer == nil {
 		dialer = &net.Dialer{Timeout: timeout}
 	}
@@ -100,6 +104,10 @@ func probeNegativeUDP(ctx context.Context, resolverIP, name string, timeout time
 
 func probeNegativeTCP(ctx context.Context, resolverIP, name string, timeout time.Duration, dialer *net.Dialer, port int) hijackObservation {
 	result := hijackObservation{Transport: "tcp", Name: name}
+	if !waitDNSQuery(ctx, resolverIP) {
+		result.Error = "stopped"
+		return result
+	}
 	if dialer == nil {
 		dialer = &net.Dialer{Timeout: timeout}
 	}

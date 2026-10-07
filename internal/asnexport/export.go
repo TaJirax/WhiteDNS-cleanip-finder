@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"whitedns-go/internal/tlsprobe"
 )
 
 // DefaultExportPath builds a timestamped output path under dataDir/asn_exports.
@@ -51,7 +53,7 @@ func ExportTargetsToTXT(dataDir string, targets []string, outputPath string) (st
 	}
 	defer f.Close()
 
-	w := bufio.NewWriter(f)
+	w := bufio.NewWriterSize(f, 1<<20)
 	written := 0
 
 	if _, err := fmt.Fprintln(w, "# ASN IP export"); err != nil {
@@ -67,12 +69,53 @@ func ExportTargetsToTXT(dataDir string, targets []string, outputPath string) (st
 		return "", 0, err
 	}
 
+	// IPv4: merge every range into sorted spans first, so overlapping ASN
+	// ranges are written once, then format from integers (no per-IP allocation).
+	// IPv6: the scan's own samples, since a /32 alone holds 2^96 addresses.
+	var spans []IPv4Span
+	var v6 []string
 	for _, target := range targets {
-		count, err := writeExpandedTargetNoCap(w, target)
+		target = strings.TrimSpace(target)
+		if target == "" {
+			continue
+		}
+		cidr := target
+		if !strings.Contains(cidr, "/") {
+			ip := net.ParseIP(cidr)
+			if ip == nil {
+				return "", 0, fmt.Errorf("invalid target %q", target)
+			}
+			if ip.To4() != nil {
+				cidr += "/32"
+			} else {
+				cidr += "/128"
+			}
+		}
+		_, ipnet, err := net.ParseCIDR(cidr)
 		if err != nil {
 			return "", 0, err
 		}
-		written += count
+		if span, ok := IPv4SpanOf(ipnet); ok {
+			spans = append(spans, span)
+		} else {
+			v6 = append(v6, cidr)
+		}
+	}
+	buf := make([]byte, 0, 16)
+	for _, span := range MergeIPv4Spans(spans) {
+		for v := span.First; v <= span.Last; v++ {
+			buf = append(AppendIPv4(buf[:0], uint32(v)), '\n')
+			if _, err := w.Write(buf); err != nil {
+				return "", 0, err
+			}
+			written++
+		}
+	}
+	for _, ip := range tlsprobe.ExpandTargets(v6) {
+		if _, err := fmt.Fprintln(w, ip); err != nil {
+			return "", 0, err
+		}
+		written++
 	}
 
 	if err := w.Flush(); err != nil {
@@ -80,57 +123,4 @@ func ExportTargetsToTXT(dataDir string, targets []string, outputPath string) (st
 	}
 
 	return path, written, nil
-}
-
-func writeExpandedTargetNoCap(w *bufio.Writer, target string) (int, error) {
-	target = strings.TrimSpace(target)
-	if target == "" {
-		return 0, nil
-	}
-
-	if ip := net.ParseIP(target); ip != nil && !strings.Contains(target, "/") {
-		if _, err := fmt.Fprintln(w, target); err != nil {
-			return 0, err
-		}
-		return 1, nil
-	}
-
-	_, ipnet, err := net.ParseCIDR(target)
-	if err != nil {
-		if ip := net.ParseIP(target); ip != nil {
-			if _, err := fmt.Fprintln(w, ip.String()); err != nil {
-				return 0, err
-			}
-			return 1, nil
-		}
-		return 0, err
-	}
-
-	// The scanner intentionally caps per-CIDR expansion at 65,536 IPs; the
-	// exporter expands without that cap to produce a full list.
-	ips := expandCIDRNoCap(ipnet)
-	for _, ip := range ips {
-		if _, err := fmt.Fprintln(w, ip); err != nil {
-			return 0, err
-		}
-	}
-	return len(ips), nil
-}
-
-func incrementIP(ip net.IP) {
-	for i := len(ip) - 1; i >= 0; i-- {
-		ip[i]++
-		if ip[i] != 0 {
-			break
-		}
-	}
-}
-
-// expandCIDRNoCap returns every IP in the provided network with no cap.
-func expandCIDRNoCap(ipnet *net.IPNet) []string {
-	var out []string
-	for ip := ipnet.IP.Mask(ipnet.Mask); ipnet.Contains(ip); incrementIP(ip) {
-		out = append(out, ip.String())
-	}
-	return out
 }

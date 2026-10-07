@@ -16,6 +16,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"whitedns-go/internal/antidpi"
 )
 
 var defaultProbeDomains = []string{
@@ -1489,7 +1490,7 @@ func (s *Scanner) probeHTTPS(ctx context.Context, ip string, port int, opts IPSc
 				tcpConn.SetNoDelay(true)
 			}
 
-			tlsConn := tls.Client(conn, applyScanTLSRoots(&tls.Config{
+			tlsConn := tls.Client(antidpi.Wrap(probeCtx, conn, s.antiDPIOptions()), applyScanTLSRoots(&tls.Config{
 				ServerName:         domain,
 				MinVersion:         tls.VersionTLS12, // strict system verification on desktop; relaxed only where Android lacks a trust store
 				ClientSessionCache: s.tlsSessionCache,
@@ -2188,4 +2189,19 @@ func (s *Scanner) ClearCache() error {
 // bracketed ("[2001:db8::1]:443"), which plain "%s:%d" formatting gets wrong.
 func hostPort(ip string, port int) string {
 	return net.JoinHostPort(ip, strconv.Itoa(port))
+}
+
+func (s *Scanner) ConfigureAntiDPI(enabled bool, size, delay int) error {
+	options := antidpi.Options{Enabled: enabled, Size: size, DelayMs: delay}
+	if err := options.Validate(); err != nil {
+		return err
+	}
+	s.config.AntiDPI, s.config.DPIFragmentSize, s.config.DPIFragmentDelayMs = enabled, size, delay
+	return nil
+}
+func (s *Scanner) antiDPIOptions() antidpi.Options {
+	if s.config == nil {
+		return antidpi.Options{}
+	}
+	return antidpi.Options{Enabled: s.config.AntiDPI, Size: s.config.DPIFragmentSize, DelayMs: s.config.DPIFragmentDelayMs}
 }

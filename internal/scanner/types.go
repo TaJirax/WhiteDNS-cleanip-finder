@@ -67,14 +67,14 @@ type Scanner struct {
 	// proxyProgressCb receives proxy-scan progress updates
 	proxyProgressCb func(processed, total, hits int, currentIP string, totalIPs int)
 	// File logging for debugging
-	logFile      *os.File
-	logMutex     sync.Mutex
+	logFile  *os.File
+	logMutex sync.Mutex
 	// cbMu guards logCb / proxyProgressCb. The UI sets them when a scan starts
 	// and clears them when it ends, while scan workers and the health monitor
 	// are still calling them — an unguarded func field is a data race, and the
 	// "check != nil then call" pattern can also observe a clear in between and
 	// call a nil func.
-	cbMu sync.RWMutex
+	cbMu         sync.RWMutex
 	logFileOwned bool
 	// performance helpers
 	dialer          *net.Dialer
@@ -217,6 +217,9 @@ func (s *Scanner) logf(format string, a ...interface{}) {
 
 // ScannerConfig holds scanner tuning parameters
 type ScannerConfig struct {
+	AntiDPI               bool
+	DPIFragmentSize       int
+	DPIFragmentDelayMs    int
 	ProbeTimeout          time.Duration
 	ProbeRetries          int
 	MaxConcurrentProbes   int
