@@ -28,25 +28,35 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      - name: Add the desktop GUI packages
+        # Every WhiteDNS artifact ships in one release: the latest
+        # whitedns-scanner release carries the desktop GUI for each platform.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download -R TaJirax/whitedns-scanner -D dist --pattern 'WhiteDNS-Scanner-*'
       - name: Verify artifacts and create checksums
         shell: bash
         run: |
+          rm -f dist/*.sha256 dist/SHA256SUMS.txt
           test -s dist/whitedns-windows-amd64.exe
           test -s dist/whitedns-linux-amd64
           test -s dist/whitedns-linux-arm64
           test -s dist/whitedns-termux-arm64
           test -s dist/whitedns-macos-amd64
           test -s dist/whitedns-macos-arm64
+          test -s dist/WhiteDNS-Scanner-windows-amd64.zip
+          test -s dist/WhiteDNS-Scanner-darwin-universal.zip
           compgen -G 'dist/*.apk' >/dev/null
           compgen -G 'dist/*.aab' >/dev/null
           (cd dist && sha256sum * > SHA256SUMS.txt)
       - name: Publish release
+        # Assembled as a draft and published only once every file is attached,
+        # so nobody downloads from a half-filled release.
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" dist/* --clobber
-          else
-            gh release create "$RELEASE_TAG" dist/* --verify-tag --title "WhiteDNS $RELEASE_TAG" --notes-file docs/release-notes.md
-          fi
+          gh release view "$RELEASE_TAG" >/dev/null 2>&1 ||
+            gh release create "$RELEASE_TAG" --draft --verify-tag --title "WhiteDNS $RELEASE_TAG" --notes-file docs/release-notes.md
+          gh release upload "$RELEASE_TAG" dist/* --clobber
+          gh release edit "$RELEASE_TAG" --title "WhiteDNS $RELEASE_TAG" --notes-file docs/release-notes.md --draft=false --latest
