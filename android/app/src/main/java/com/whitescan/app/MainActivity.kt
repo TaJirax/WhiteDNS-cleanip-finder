@@ -530,7 +530,8 @@ private fun FormState.toEngineConfig(constrainedDevice: Boolean = false): ScanCo
     cfg.lowBandwidth  = lowBandwidth || effectiveLiteMode
     cfg.transferModel = transferModel
     cfg.edgeProvider  = edgeProvider.trim()
-    cfg.setFastMode(fastMode && !lowBandwidth && !effectiveLiteMode)
+    cfg.limitedNetwork = limitedNetwork
+    cfg.setFastMode(fastMode && !lowBandwidth && !effectiveLiteMode && !limitedNetwork)
     cfg.setSNIDomains(sniDomains.trim())
     cfg.setSNIStrict(sniStrict)
     cfg.setVerboseLog(verboseLog)

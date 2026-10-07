@@ -44,6 +44,7 @@ data class FormState(
     val ports: String = "",
     val concurrency: String = "50",   // phone-safe default
     val lowBandwidth: Boolean = false,
+    val limitedNetwork: Boolean = false,
     val transferModel: String = "old",
     val sniDomains: String = "",
     val sniStrict: Boolean = false,
@@ -514,6 +515,13 @@ fun ScanConfigForm(
                         onCheckedChange = { onFormChange(form.copy(lowBandwidth = it)) },
                     )
                     if (kind == ScanKind.IP) {
+                        Spacer(Modifier.height(4.dp))
+                        SwitchRow(
+                            checked = form.limitedNetwork,
+                            title = "Limited network mode",
+                            detail = "For lossy connections: no quick connection check, at most 3 domains at a time, retries kept. Slower, but misses fewer IPs",
+                            onCheckedChange = { onFormChange(form.copy(limitedNetwork = it)) },
+                        )
                         Spacer(Modifier.height(14.dp))
                         Text("Effort per IP", style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -527,7 +535,7 @@ fun ScanConfigForm(
                             )
                             FilterChip(
                                 selected = form.fastMode,
-                                enabled = !form.lowBandwidth && !form.liteMode,
+                                enabled = !form.lowBandwidth && !form.liteMode && !form.limitedNetwork,
                                 onClick = { onFormChange(form.copy(fastMode = true)) },
                                 label = { Text("Fast") },
                                 modifier = Modifier.heightIn(min = 48.dp),
@@ -536,8 +544,8 @@ fun ScanConfigForm(
                         Spacer(Modifier.height(6.dp))
                         Text(
                             when {
-                                form.lowBandwidth || form.liteMode ->
-                                    "Fast is off on slow links and in Lite mode — the retries it drops are what find a hit there"
+                                form.lowBandwidth || form.liteMode || form.limitedNetwork ->
+                                    "Fast is off on slow links, in Lite mode and in Limited network mode — the retries it drops are what find a hit there"
                                 form.fastMode ->
                                     "Stops each IP as soon as its verdict is settled. Same IPs found, fewer probes each"
                                 else ->

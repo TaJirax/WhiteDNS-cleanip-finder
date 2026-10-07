@@ -23,6 +23,7 @@ type ScanConfig struct {
 	TimeoutMs          int    // per-probe timeout in ms; <=0 -> default
 	TransferModel      string // proxy scans: "old" or "brrr"
 	LowBandwidth       bool   // extend timeouts for slow links
+	LimitedNetwork     bool   // slow or lossy links: no TCP pre-check, at most 3 domains at once, no fast mode
 	SNIDomains         string // SNI scan: custom domains; empty -> managed defaults
 	SNIStrict          bool   // SNI scan: require SNI itself to be accepted
 	VerboseLog         bool   // emit per-endpoint probe log lines (slower; for debugging)

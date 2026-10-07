@@ -482,11 +482,12 @@ func StartIPScan(dataDir string, cfg *ScanConfig, l ScanListener) *ScanHandle {
 			Concurrency:            conc,
 			Timeout:                timeout,
 			LowBandwidth:           lowBandwidth,
+			LimitedNetwork:         cfg.LimitedNetwork,
 			DisableAutoConcurrency: true,
 			ProbeDomainsHTTP:       edgeDomains,
 			ProbeDomainsHTTPS:      edgeDomains,
 			RequiredProbeDomains:   edgeRequiredDomains(cfg),
-			FastMode:               cfg.FastMode && !lowBandwidth && !liteMode,
+			FastMode:               cfg.FastMode && !lowBandwidth && !liteMode && !cfg.LimitedNetwork,
 		}
 		if conc <= 25 || lowBandwidth || liteMode {
 			o.AdaptiveDomainConcurrency = 1

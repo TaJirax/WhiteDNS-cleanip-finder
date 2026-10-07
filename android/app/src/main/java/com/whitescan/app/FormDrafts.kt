@@ -15,6 +15,7 @@ put("targets",targets)
 put("ports",ports)
 put("concurrency",concurrency)
 put("lowBandwidth",lowBandwidth)
+put("limitedNetwork",limitedNetwork)
 put("transferModel",transferModel)
 put("sniDomains",sniDomains)
 put("sniStrict",sniStrict)
@@ -51,6 +52,7 @@ targets=json.optString("targets",defaults.targets),
 ports=json.optString("ports",defaults.ports),
 concurrency=json.optString("concurrency",defaults.concurrency),
 lowBandwidth=json.optBoolean("lowBandwidth",defaults.lowBandwidth),
+limitedNetwork=json.optBoolean("limitedNetwork",defaults.limitedNetwork),
 transferModel=json.optString("transferModel",defaults.transferModel),
 sniDomains=json.optString("sniDomains",defaults.sniDomains),
 sniStrict=json.optBoolean("sniStrict",defaults.sniStrict),

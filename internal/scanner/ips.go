@@ -188,6 +188,10 @@ type IPScanOptions struct {
 	EndpointCount             int
 	AdaptiveDomainConcurrency int // Set by pipeline based on scan conditions (default 4, up to 6)
 	LowBandwidth              bool
+	// LimitedNetwork trades speed for patience on slow or lossy networks: no
+	// TCP pre-check (each domain gets its own connection attempts and
+	// retries) and at most 3 domains of an endpoint probed at once.
+	LimitedNetwork bool
 	Method                    string
 	// MaxIPs caps the number of unique IPs expanded from CIDRs (0 = unlimited).
 	// Used by the mobile bridge to keep memory bounded on huge ranges (e.g. CDNs).
@@ -1100,15 +1104,17 @@ func (s *Scanner) probeIP(ctx context.Context, ip string, port int, opts IPScanO
 	if connectTimeout <= 0 {
 		connectTimeout = ScanTimeout
 	}
-	preConn, preErr := probePreReachabilityDial(ctx, hostPort(ip, port), connectTimeout)
-	if preErr != nil {
-		result.Status = "dead"
-		result.Error = preErr.Error()
-		s.vlogf("[PROBE] Complete %s:%d status=dead (tcp pre-check: %v)\n", ip, port, preErr)
-		return result
-	}
-	if preConn != nil {
-		_ = preConn.Close()
+	if !opts.LimitedNetwork {
+		preConn, preErr := probePreReachabilityDial(ctx, hostPort(ip, port), connectTimeout)
+		if preErr != nil {
+			result.Status = "dead"
+			result.Error = preErr.Error()
+			s.vlogf("[PROBE] Complete %s:%d status=dead (tcp pre-check: %v)\n", ip, port, preErr)
+			return result
+		}
+		if preConn != nil {
+			_ = preConn.Close()
+		}
 	}
 
 	if isHTTPS {
@@ -1231,6 +1237,9 @@ func (s *Scanner) probeHTTP(ctx context.Context, ip string, port int, opts IPSca
 	semSize := opts.AdaptiveDomainConcurrency
 	if semSize <= 0 {
 		semSize = 4 // default if not set
+	}
+	if opts.LimitedNetwork {
+		semSize = min(semSize, 3) // a weak link is not flooded
 	}
 	if semSize < 1 {
 		semSize = 1
@@ -1615,6 +1624,9 @@ func (s *Scanner) probeHTTPS(ctx context.Context, ip string, port int, opts IPSc
 	semSize := opts.AdaptiveDomainConcurrency
 	if semSize <= 0 {
 		semSize = 4 // default if not set
+	}
+	if opts.LimitedNetwork {
+		semSize = min(semSize, 3) // a weak link is not flooded
 	}
 	if semSize < 1 {
 		semSize = 1
